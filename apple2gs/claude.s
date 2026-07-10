@@ -162,7 +162,7 @@ start:
         sta     BORDERCOL
         jsr     snd_init        ; DOC: load the waveform, oscillators halted
 
-        TEXT    str_welcome, 21, 16, 2
+        TEXT    str_welcome, 20, 16, 2
         TEXT    str_ver, 37, 17, 3
         TEXT    str_by, 31, 18, 3
 
@@ -176,7 +176,7 @@ menu_screen:
         .a8
         .i8
         jsr     clear_screen
-        TEXT    str_welcome, 21, 16, 2
+        TEXT    str_welcome, 20, 16, 2
         TEXT    str_ver, 37, 17, 3
         TEXT    str_by, 31, 18, 3
         jsr     music_start     ; the ditty plays once per menu visit
@@ -2531,7 +2531,7 @@ mt_x:   rts
 ; strings
 ; =====================================================================
 str_title:  .byte "Claude Code",0         ; placeholder until the real header lands
-str_welcome:.byte "Claude Code Terminal for the Apple ][",0
+str_welcome:.byte "Claude Code Terminal for the Apple IIgs",0
 str_ver:    .byte "v0.2.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0

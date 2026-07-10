@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# femu-sd - get disk images onto a BMOW FloppyEmu SD card, reliably.
+#
+# FloppyEmu requires each image file to occupy CONTIGUOUS sectors on the
+# card's FAT filesystem, or it refuses the file ("file not contiguous").
+# Modern OSes make that surprisingly easy to violate: macOS's FAT driver
+# allocates first-fit from the front of the card, so holes left by deleted
+# files shred a fresh copy, and Spotlight / fseventsd / AppleDouble "._*"
+# writes interleave with copies and split them. This tool works around all
+# of it:
+#
+#   push     copy an image to the card the safe way (DEFAULT command):
+#            if a same-size file already exists it is overwritten IN PLACE
+#            (same clusters - physically cannot fragment), otherwise a
+#            fresh copy with metadata-noise suppression.
+#   list     show the disk images on the card.
+#   check    read the card's FAT directly and report per-file contiguity
+#            (needs sudo; tells you *before* the FloppyEmu complains).
+#   repair   repack the whole card (copy off, wipe, copy back in one
+#            pass) - the fix for an already-fragmented card.
+#   eject    flush and eject the card.
+#
+# Usage:
+#   femu-sd [push] image.dsk [more.po ...] [/Volumes/CARD]
+#   femu-sd list|check|repair|eject [/Volumes/CARD]
+#
+# The card is auto-detected (the mounted FAT volume); pass it explicitly
+# if you have several. macOS and Linux.
+
+set -u
+
+say()  { printf '==> %s\n' "$*"; }
+die()  { printf 'femu-sd: %s\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- platform
+case "$(uname -s)" in
+    Darwin) MAC=1 ;;
+    *)      MAC=0 ;;
+esac
+
+fsize() {  # file size in bytes, portably
+    if [ "$MAC" = 1 ]; then stat -f%z "$1"; else stat -c%s "$1"; fi
+}
+
+clean_dots() {  # remove the AppleDouble/metadata noise macOS drops on FAT
+    if command -v dot_clean >/dev/null 2>&1; then dot_clean -m "$1" 2>/dev/null || true; fi
+    find "$1" -maxdepth 1 -name '._*' -delete 2>/dev/null || true
+    rm -f "$1/.DS_Store" 2>/dev/null || true
+}
+
+quiet_card() {  # stop background services from allocating clusters mid-copy
+    if [ "$MAC" = 1 ]; then
+        mdutil -i off "$1" >/dev/null 2>&1 || true
+        touch "$1/.fseventsd/no_log" 2>/dev/null || true
+    fi
+}
+
+# ---------------------------------------------------------------- the card
+find_card() {
+    local cards=() line
+    while IFS= read -r line; do
+        cards+=("$line")
+    done < <(mount | awk '/msdos|exfat|vfat/ {sub(/^.* on /,""); sub(/ \(.*/,""); sub(/ type .*/,""); print}')
+    if [ ${#cards[@]} -eq 0 ]; then
+        die "no FAT-formatted volume is mounted - insert the FloppyEmu SD card"
+    elif [ ${#cards[@]} -eq 1 ]; then
+        printf '%s\n' "${cards[0]}"
+    else
+        printf 'Several FAT volumes are mounted:\n' >&2
+        local i=1 c
+        for c in "${cards[@]}"; do printf '  %d) %s\n' "$i" "$c" >&2; i=$((i+1)); done
+        printf 'Which one is the FloppyEmu card? ' >&2
+        local pick; read -r pick
+        [ "$pick" -ge 1 ] 2>/dev/null && [ "$pick" -le ${#cards[@]} ] \
+            || die "that wasn't one of the choices"
+        printf '%s\n' "${cards[$((pick-1))]}"
+    fi
+}
+
+card_device() {  # mount point -> block device
+    df "$1" | awk 'NR==2 {print $1}'
+}
+
+# ---------------------------------------------------------------- commands
+cmd_push() {
+    local card="$1"; shift
+    [ $# -ge 1 ] || die "nothing to push - give me at least one disk image"
+    local img dest
+    for img in "$@"; do
+        [ -f "$img" ] || die "no such image: $img"
+        dest="$card/$(basename "$img")"
+        if [ -f "$dest" ] && [ "$(fsize "$img")" -eq "$(fsize "$dest")" ]; then
+            dd if="$img" of="$dest" conv=notrunc status=none || die "dd failed for $img"
+            say "updated in place: $(basename "$dest") (same clusters - cannot fragment)"
+        else
+            quiet_card "$card"
+            if [ "$MAC" = 1 ]; then cp -X "$img" "$dest" || die "copy failed for $img"
+            else cp "$img" "$dest" || die "copy failed for $img"; fi
+            clean_dots "$card"
+            say "installed: $(basename "$dest")"
+        fi
+    done
+    sync
+    say "done. If the FloppyEmu says 'file not contiguous': femu-sd check, then femu-sd repair."
+}
+
+cmd_list() {
+    local card="$1"
+    say "images on $card:"
+    local f n found=0
+    for f in "$card"/*; do
+        [ -f "$f" ] || continue
+        n=$(basename "$f")
+        case "$n" in
+            .*|_*) continue ;;
+            *.dsk|*.DSK|*.do|*.DO|*.po|*.PO|*.2mg|*.2MG|*.hdv|*.HDV|*.nib|*.NIB|*.woz|*.WOZ|*.moof|*.MOOF|*.image|*.img|*.dsk.gz)
+                printf '    %-32s %10s bytes\n' "$n" "$(fsize "$f")"; found=1 ;;
+        esac
+    done
+    [ "$found" = 1 ] || say "  (none)"
+}
+
+cmd_check() {
+    local card="$1"
+    local here; here=$(cd "$(dirname "$0")" && pwd)
+    local fatmap="$here/fatmap.py"
+    [ -f "$fatmap" ] || die "fatmap.py not found next to femu-sd"
+    command -v python3 >/dev/null || die "check needs python3"
+    local dev; dev=$(card_device "$card")
+    [ -n "$dev" ] || die "couldn't resolve the device for $card"
+    if [ "$MAC" = 1 ]; then dev="${dev/\/dev\/disk//dev/rdisk}"; fi
+    say "reading the FAT on $dev (needs sudo)..."
+    sudo python3 "$fatmap" "$dev"
+}
+
+cmd_repair() {
+    local card="$1"
+    say "this repacks EVERY file on $card (copy off, wipe, copy back)"
+    printf 'Continue? [y/N] '
+    local a; read -r a
+    [ "$a" = y ] || [ "$a" = Y ] || exit 1
+    local tmp; tmp=$(mktemp -d) || die "mktemp failed"
+    say "backing up card contents to $tmp ..."
+    rsync -a --exclude='._*' --exclude='.Spotlight-V100' --exclude='.fseventsd' \
+          --exclude='.Trashes' --exclude='.DS_Store' "$card/" "$tmp/" \
+        || die "backup failed - card untouched"
+    quiet_card "$card"
+    say "wiping card (system dirs kept) ..."
+    find "$card" -mindepth 1 -maxdepth 1 \
+         ! -name '.Spotlight-V100' ! -name '.fseventsd' ! -name '.Trashes' \
+         -exec rm -rf {} +
+    say "copying back in one pass ..."
+    rsync -a "$tmp/" "$card/" || die "restore failed - your files are safe in $tmp"
+    clean_dots "$card"
+    sync
+    say "repacked contiguously. Backup kept at $tmp until you delete it."
+}
+
+cmd_eject() {
+    local card="$1"
+    sync
+    if [ "$MAC" = 1 ]; then diskutil eject "$card"
+    elif command -v udisksctl >/dev/null 2>&1; then
+        udisksctl unmount -b "$(card_device "$card")"
+    else umount "$card"; fi
+    say "safe to pull the card"
+}
+
+usage() {
+    sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+# ------------------------------------------------------------------- main
+[ $# -ge 1 ] || usage
+case "$1" in
+    -h|--help|help) usage ;;
+esac
+
+cmd=push
+case "$1" in
+    push|list|check|repair|eject) cmd="$1"; shift ;;
+esac
+
+# a trailing directory argument is the card; everything else is images
+card=""
+args=()
+for a in "$@"; do
+    if [ -d "$a" ]; then card="$a"; else args+=("$a"); fi
+done
+[ -n "$card" ] || card=$(find_card) || exit 1
+
+case "$cmd" in
+    push)   cmd_push "$card" ${args+"${args[@]}"} ;;
+    list)   cmd_list "$card" ;;
+    check)  cmd_check "$card" ;;
+    repair) cmd_repair "$card" ;;
+    eject)  cmd_eject "$card" ;;
+esac

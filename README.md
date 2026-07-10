@@ -79,7 +79,7 @@ One-time setup:
    from slot 6). On a Mac, `tools/install-sd.sh` does it safely — FloppyEmu
    refuses image files that land fragmented on the card's FAT filesystem
    ("file not contiguous"), and macOS fragments them more than you'd think.
-   Already-fragmented card: `tools/install-sd.sh --repair` fixes it once.
+   Already-fragmented card: `tools/install-sd.sh repair` fixes it once (the tool lives at [wr/floppyemu-sd](https://github.com/wr/floppyemu-sd)).
 
 4. Power on. The modem's already dialing while the splash plays. **Connect.**
 
