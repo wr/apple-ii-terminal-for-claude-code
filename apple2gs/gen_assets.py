@@ -552,7 +552,7 @@ def _voice(notes, bpm):
         prev = end
         f = 0 if name == "R" else max(1, min(0xFFFF, round(_hz(name) * 131072 / DOC_SCAN)))
         out += [f & 0xFF, f >> 8, dur]
-    out += [0, 0, 0]                        # terminator: wrap to stream start
+    out += [0, 0, 0]                        # terminator: end of tune
     return out
 
 def _wave():
@@ -563,73 +563,33 @@ def _wave():
         w = [(w[i - 1] + 2 * w[i] + w[(i + 1) % 256]) // 4 for i in range(256)]
     return [max(1, v) for v in w]
 
-TUNES = [
-    # (name, bpm, melody, bass) — all original compositions; each tune's
-    # voices total the same beat count so independent wraps stay locked.
-    # Round 4 brief (Wells): TELETYPE was closest; try a "1 2e&a 3-&" bar
-    # with swing. Slot 1 keeps the original for A/B; slots 2-4 are swung
-    # takes on it. Swing = triplet-feel durations: long/short sixteenth
-    # pairs are 1/3 + 1/6 beat, the swung "&" lands at 2/3.
-    ("TELETYPE", 160,   # round-3 reference (straight taps)
-     [("C5",.25),("R",.25),("C5",.25),("R",.25),("E5",.25),("R",.25),("G5",.5),("R",.5),
-      ("A5",.5),("G5",.5),("E5",.5),
-      ("D5",.25),("R",.25),("D5",.25),("R",.25),("F5",.25),("R",.25),("A5",.5),("R",.5),
-      ("G5",.5),("E5",.5),("C5",.5)],
-     [("C3",.5),("R",.5),("C3",.5),("R",.5),("G2",.5),("R",.5),("C3",.5),("R",.5),
-      ("F2",.5),("R",.5),("G2",.5),("R",.5),("C3",.5),("R",.5),("C3",.5),("R",.5)]),
-    ("RAGTIME", 160,   # the spec verbatim: 1 / swung 2e&a run up / 3-&
-     [("C5",.5),("R",.5),
-      ("E5",1/3),("G5",1/6),("A5",1/3),("G5",1/6),
-      ("E5",2/3),("C5",1/3),("R",1),
-      ("D5",.5),("R",.5),
-      ("F5",1/3),("A5",1/6),("G5",1/3),("F5",1/6),
-      ("D5",2/3),("C5",1/3),("R",1)],
-     [("C3",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3),
-      ("F2",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3)]),
-    ("GROOVE", 144,   # same rhythm, lazier tempo, pentatonic contour
-     [("G4",.5),("R",.5),
-      ("C5",1/3),("D5",1/6),("E5",1/3),("D5",1/6),
-      ("C5",2/3),("G4",1/3),("R",1),
-      ("A4",.5),("R",.5),
-      ("C5",1/3),("D5",1/6),("G5",1/3),("E5",1/6),
-      ("D5",2/3),("C5",1/3),("R",1)],
-     [("C3",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3),
-      ("A2",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3)]),
-    ("SHUFFLE", 176,   # same rhythm, faster, runs tumble downward
-     [("E5",.5),("R",.5),
-      ("G5",1/3),("E5",1/6),("D5",1/3),("C5",1/6),
-      ("D5",2/3),("G4",1/3),("R",1),
-      ("E5",.5),("R",.5),
-      ("A5",1/3),("G5",1/6),("E5",1/3),("D5",1/6),
-      ("C5",2/3),("C5",1/3),("R",1)],
-     [("C3",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3),
-      ("F2",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3)]),
-]
+# The menu ditty: "GROOVE", winner of a 4-round audition (2026-07-09).
+# Wells' bar spec: hit on 1, swung 2-e-&-a run, swung 3-&, beat 4 empty.
+# Swing = triplet-feel durations (1/3 + 1/6 beat pairs, the & at 2/3).
+# Played ONCE per menu visit, not looped.
+MUS_BPM = 144
+MUS_MEL = [("G4",.5),("R",.5),
+           ("C5",1/3),("D5",1/6),("E5",1/3),("D5",1/6),
+           ("C5",2/3),("G4",1/3),("R",1),
+           ("A4",.5),("R",.5),
+           ("C5",1/3),("D5",1/6),("G5",1/3),("E5",1/6),
+           ("D5",2/3),("C5",1/3),("R",1)]
+MUS_BASS = [("C3",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3),
+            ("A2",.5),("R",.5),("R",1),("G2",.5),("R",.5),("R",2/3),("G2",1/3)]
 
 def emit_music():
-    for name, bpm, mel, bass in TUNES:
-        mb, bb = sum(b for _, b in mel), sum(b for _, b in bass)
-        assert mb == bb, f"{name}: melody {mb} beats vs bass {bb}"
+    assert sum(b for _, b in MUS_MEL) == sum(b for _, b in MUS_BASS)
     wave = _wave()
     lines = ["wave_data:"]
     for i in range(0, 256, 16):
         lines.append("    .byte " + ",".join(f"${b:02X}" for b in wave[i:i + 16]))
-    blob = []
-    for ti, (name, bpm, mel, bass) in enumerate(TUNES):
-        lines.append(f"MUS_T{ti}V0 = {len(blob)}")
-        blob += _voice(mel, bpm)
-        lines.append(f"MUS_T{ti}V1 = {len(blob)}")
-        blob += _voice(bass, bpm)
+    blob = _voice(MUS_MEL, MUS_BPM)
+    lines.append("MUS_V0 = 0")
+    lines.append(f"MUS_V1 = {len(blob)}")
+    blob += _voice(MUS_BASS, MUS_BPM)
     lines.append("music_data:")
     for i in range(0, len(blob), 16):
         lines.append("    .byte " + ",".join(f"${b:02X}" for b in blob[i:i + 16]))
-    for ti, (name, *_rest) in enumerate(TUNES):
-        lines.append(f'mus_name{ti}: .byte "{name}",0')
-    n = len(TUNES)
-    lines.append("MUS_NTUNES = %d" % n)
-    lines.append("mus_names: .word " + ",".join(f"mus_name{i}" for i in range(n)))
-    lines.append("tune_v0:   .word " + ",".join(f"MUS_T{i}V0" for i in range(n)))
-    lines.append("tune_v1:   .word " + ",".join(f"MUS_T{i}V1" for i in range(n)))
     return "\n".join(lines)
 
 
