@@ -593,12 +593,14 @@ def _wave():
 # Swing = triplet-feel durations (1/3 + 1/6 beat pairs, the & at 2/3).
 # Played ONCE per menu visit, not looped.
 MUS_BPM = 144
+# the dooo-doot pair: dooo on 3, then a full quarter rest, doot on the
+# swung & of 4 (per Wells - at the & of 3 it read as "3-e", too tight)
 MUS_MEL = [("G4",.5),("R",.5),
            ("C5",1/3),("D5",1/6),("E5",1/3),("D5",1/6),
-           ("C5",2/3),("G4",1/3),("R",1),
+           ("C5",2/3),("R",1),("G4",1/3),
            ("A4",.5),("R",.5),
            ("C5",1/3),("D5",1/6),("G5",1/3),("E5",1/6),
-           ("D5",2/3),("C5",1/3),("R",1)]
+           ("D5",2/3),("R",1),("C5",1/3)]
 # bass on the downbeats only - a swung pickup on the "a" of 4 landed in
 # the wrong-feeling spot (Wells, twice)
 MUS_BASS = [("C3",1),("R",1),("G2",1),("R",1),
