@@ -219,17 +219,13 @@ def require_pairing(term: Terminal, args) -> bool:
     if peer in _paired_peers:
         return True
     log(f"pairing: waiting for code from {peer} (code: {args.pair_code})")
-    if args.app:
-        # An idle native client discards unsolicited text (stray modem
-        # chatter protection) but always renders header frames - so the
-        # lock notice goes out as one, visible the moment the session
-        # screen appears.
-        term.write(b"\x0e")
-        term.write_line("Claude Code Terminal")
-        term.write_line("LOCKED - type the pairing code")
-        term.write_line("(shown on the bridge console)")
-    else:
-        term.write_line("Locked. Enter the pairing code shown on the bridge.")
+    # Don't push the prompt proactively: on a native client the connect
+    # happens while the user is still on the boot menu, whose buffer
+    # drain discards unsolicited bytes - the prompt would be eaten and
+    # the lock would look silent. Instead, answer the FIRST real line
+    # with the prompt (the client is in its reply-reader by then and
+    # renders it), and end every answer with EOT so it never hangs.
+    prompted = False
     while not term.closed:
         line = term.read_line()
         if line is None:
@@ -240,15 +236,17 @@ def require_pairing(term: Terminal, args) -> bool:
         if line == args.pair_code:
             _paired_peers.add(peer)
             log(f"pairing: {peer} paired")
-            term.write_line("Paired.")
+            term.write_line("Paired - go ahead.")
             if args.app:
                 term.write(EOT)  # the client waits on end-of-reply
             return True
-        log(f"pairing: wrong code from {peer}")
-        time.sleep(1.0)  # no rapid guessing
-        term.write_line("Wrong code - it's printed on the bridge console.")
+        msg = ("Wrong code." if prompted else "This bridge is locked.")
+        term.write_line(f"{msg} Type the code shown on the bridge console.")
         if args.app:
             term.write(EOT)
+        prompted = True
+        log(f"pairing: {'wrong' if prompted else 'prompted'} code from {peer}")
+        time.sleep(0.5)  # gentle throttle, not a hang
     return False
 
 

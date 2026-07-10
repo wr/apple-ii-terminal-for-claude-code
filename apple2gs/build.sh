@@ -39,13 +39,13 @@ BAS
 $TOK < hello.bas > HH
 cp claude.obj COBJ
 
-cp "$BASE" CLAUDEG.dsk
-$DOS33 CLAUDEG.dsk UNLOCK HELLO
-$DOS33 -y CLAUDEG.dsk DELETE HELLO
-$DOS33 -y CLAUDEG.dsk SAVE A HH HELLO
-$DOS33 -a 0x4000 CLAUDEG.dsk BSAVE COBJ COBJ
-$DOS33 -a 0x2000 CLAUDEG.dsk BSAVE COBJ8 COBJ8
-$DOS33 CLAUDEG.dsk CATALOG
+cp "$BASE" CLAUDE.dsk
+$DOS33 CLAUDE.dsk UNLOCK HELLO
+$DOS33 -y CLAUDE.dsk DELETE HELLO
+$DOS33 -y CLAUDE.dsk SAVE A HH HELLO
+$DOS33 -a 0x4000 CLAUDE.dsk BSAVE COBJ COBJ
+$DOS33 -a 0x2000 CLAUDE.dsk BSAVE COBJ8 COBJ8
+$DOS33 CLAUDE.dsk CATALOG
 # convenience deploy for KEGS (~/config.kegs boots this path); harmless if absent
-cp CLAUDEG.dsk "$HOME/Downloads/CLAUDEG.dsk" 2>/dev/null || true
-echo "=== built CLAUDEG.dsk (master-based, boots KEGS + FloppyEmu + real drives) ==="
+cp CLAUDE.dsk "$HOME/Downloads/CLAUDE.dsk" 2>/dev/null || true
+echo "=== built CLAUDE.dsk (master-based, boots KEGS + FloppyEmu + real drives) ==="

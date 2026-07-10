@@ -74,7 +74,7 @@ if $repair; then
 fi
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-image="${1:-$script_dir/../apple2gs/CLAUDEG.dsk}"
+image="${1:-$script_dir/../apple2gs/CLAUDE.dsk}"
 [ -f "$image" ] || die "image not found: $image (run apple2gs/build.sh first?)"
 card="${2:-$(find_card)}" || exit 1
 [ -d "$card" ] || die "no such volume: $card"
