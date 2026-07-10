@@ -17,52 +17,6 @@ COLORS = {                       # value -> $0RGB (4 bits/channel)
 # ---- mascot art: chunky pixel critter, coral body + black square eyes + legs.
 # One char = one source pixel; scaled up H/V in emit_mascot (640-mode pixels are
 # narrow, so we stretch more horizontally to look square).
-# ---- canonical Clawd (from the clawd-animation skill's template): 14x8 flat
-# wide body, 1px eyes at (4,1)/(9,1), no mouth; expression = eye offset/blink.
-# extracted from the official clawd-laptop spritesheet (stand frame, 12x8)
-CLAWD_BODY = [
-    "..11111111..",
-    "..11111111..",
-    "111111111111",
-    "111111111111",
-    "..11111111..",
-    "..11111111..",
-    "..1.1..1.1..",
-    "..1.1..1.1..",
-]
-EYE_L, EYE_R = (3, 1), (8, 1)
-EYES = {                         # eye pixel offsets, or None for a blink
-    "fwd":  (0, 0),
-    "down": (0, 1),
-    "left": (-1, 0),
-    None:   None,
-}
-
-
-def blank_canvas(w, h):
-    return [["." for _ in range(w)] for _ in range(h)]
-
-
-def place(canvas, art, ox, oy, ch="C"):
-    """Stamp '1' cells of an art matrix onto the canvas as color letter ch."""
-    for y, row in enumerate(art):
-        for x, c in enumerate(row):
-            if c == "1" and 0 <= oy + y < len(canvas) and 0 <= ox + x < len(canvas[0]):
-                canvas[oy + y][ox + x] = ch
-
-
-def place_clawd(canvas, ox, oy, eyes="fwd"):
-    place(canvas, CLAWD_BODY, ox, oy, "C")
-    off = EYES[eyes]
-    if off is not None:
-        for ex, ey in (EYE_L, EYE_R):
-            canvas[oy + ey + off[1]][ox + ex + off[0]] = "K"
-
-
-def rows(canvas):
-    return ["".join(r) for r in canvas]
-
-
 def mascot_frames():
     """Session mascot: the ORIGINAL hand-drawn critter, one static frame
     (no blinking, no hopping - per Wells)."""
@@ -495,7 +449,6 @@ def emit_mascot():
         frames_rows.append(out_rows)
     h = len(frames_rows[0])
     lines = [f"MASCOT_H = {h}", f"MASCOT_BYTES = {bytes_per_row}",
-             f"MASCOT_FSIZE = {h * bytes_per_row}   ; bytes per animation frame",
              "mascot_data:"]
     for fi, out_rows in enumerate(frames_rows):
         lines.append(f"    ; frame {fi}")
@@ -571,10 +524,6 @@ def emit_font():
         rowbytes = glyphs.get(code, blank)
         lines.append(f"    ; '{chr(code)}'")
         lines.append("    .byte " + ",".join(f"${b:02X}" for b in rowbytes))
-    # slot 127: a checkmark for the boot menu (unscii-8 lacks U+2713)
-    rowbytes = glyphs.get(0x2713) or [0x00, 0x01, 0x02, 0x04, 0x88, 0x50, 0x20, 0x00]
-    lines.append("    ; checkmark (char 127)")
-    lines.append("    .byte " + ",".join(f"${b:02X}" for b in rowbytes))
     return "\n".join(lines)
 
 

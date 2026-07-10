@@ -102,8 +102,6 @@ start:
         sta     destptr+2
         stz     rb_head         ; ring buffer is used during the splash
         stz     rb_tail         ; (vbl_edge polls) - init before anything serial
-        stz     blk_prev
-        stz     blk_cnt
         stz     menusel
 
         lda     #$C1
@@ -1398,39 +1396,6 @@ hsk_lp:
         bne     hsk_lp
         rts
 
-; =====================================================================
-; blink_tick - idle mascot blink, driven from the read_line key loop.
-;   Counts VBL rising edges; at ~4s the eyes close, ~130ms later they
-;   reopen and the cycle restarts. Skipped once the header (and mascot)
-;   have scrolled off the transcript.
-; =====================================================================
-blink_tick:
-        .a8
-        .i8
-        lda     header_locked
-        bne     bt_x
-        lda     RDVBL
-        and     #$80
-        cmp     blk_prev
-        beq     bt_x            ; no VBL transition since last look
-        sta     blk_prev
-        cmp     #$80
-        bne     bt_x            ; count rising edges only -> 60 Hz ticks
-        inc     blk_cnt
-        lda     blk_cnt
-        cmp     #240            ; ~4 s of idle: eyes shut
-        bne     bt_open
-        lda     #1
-        jmp     mascot_frame
-bt_open:
-        cmp     #248            ; ~130 ms later: eyes open, restart cycle
-        bne     bt_x
-        stz     blk_cnt
-        lda     #0
-        jmp     mascot_frame
-bt_x:
-        rts
-
 ; check_incoming - non-blocking: draw a header frame the bridge sent while idle
 ;   (so the real header appears at boot). Ignores any other stray byte.
 check_incoming:
@@ -1573,17 +1538,10 @@ cra_st: lda     #0
         rts
 
 ; =====================================================================
-; draw_mascot
+; draw_mascot - the single static mascot frame (deliberately not animated)
 ; =====================================================================
-; entry draw_mascot: frame 0, callable from any A width (boot calls in a16).
-; entry mascot_frame: A (a8) = frame 0-2. Both exit .a8/.i8.
+; callable from any A/X width (boot calls in a16); exits .a8/.i8.
 draw_mascot:
-        sep     #$20
-        .a8
-        lda     #0
-mascot_frame:
-        .a8
-        pha
         rep     #$30
         .a16
         .i16
@@ -1593,17 +1551,7 @@ mascot_frame:
         .a8
         lda     #MASCOT_H
         sta     rowcnt
-        rep     #$10
-        .i16
-        pla                     ; frame index -> X = data offset within mascot_data
-        ldx     #0
-        cmp     #1
-        bcc     mf_go           ; 0 -> offset 0
-        bne     mf_2
-        ldx     #MASCOT_FSIZE   ; 1 -> one frame in
-        bra     mf_go
-mf_2:   ldx     #MASCOT_FSIZE*2 ; 2 -> two frames in
-mf_go:
+        ldx     #0              ; data offset within mascot_data
 dm_row:
         ldy     #$0000
 dm_byte:
@@ -2123,7 +2071,6 @@ dl2:    iny
 ; strings
 ; =====================================================================
 str_title:  .byte "Claude Code",0         ; placeholder until the real header lands
-str_conn:   .byte "connecting...",0       ; splash status line
 str_welcome:.byte "Welcome to Claude Code ][",0
 str_ver:    .byte "v0.1.0",0
 str_by:     .byte "by Wells Workshop",0
@@ -2171,8 +2118,6 @@ b_view:     .res 1          ; scrollback offset (0 = live)
 header_locked: .res 1       ; nonzero once the header has scrolled off (freeze it)
 rb_head:    .res 1          ; serial Rx ring buffer write index
 rb_tail:    .res 1          ; serial Rx ring buffer read index
-blk_prev:   .res 1          ; last seen VBL bit (edge detector for the blink)
-blk_cnt:    .res 1          ; VBL frames since the blink cycle started
 mascot_at:  .res 2          ; screen address the mascot draws at (splash centers it)
 rowrep:     .res 1          ; splash draw: scanline repeat counter per stored row
 menusel:    .res 1          ; boot menu: selected item 0-3

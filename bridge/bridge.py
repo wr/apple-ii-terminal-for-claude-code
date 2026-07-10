@@ -123,9 +123,10 @@ def run_bootstrap(term: Terminal, path: str) -> None:
 
 
 def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
-    """Protocol for the native client (apple2/CLAUDE.APP.bas.txt): the bridge
-    stays silent (no banner, no prompts, no echo) and just relays the backend's
-    reply, then sends EOT. The Apple II app draws all the UI itself."""
+    """Protocol for the native clients (apple2gs/claude.s, or the simpler
+    apple2/CLAUDE.APP.bas.txt): the bridge stays silent (no banner, no prompts,
+    no echo) and just relays the backend's reply, then sends EOT. The Apple II
+    app draws all the UI itself."""
     cols = args.cols
     if getattr(args, "bootstrap", None):
         # Install-only mode: serve the binary on every ready byte so the IIgs
@@ -334,13 +335,14 @@ def parse_args(argv=None):
     p.add_argument("--cols", type=int, default=80, choices=(40, 80),
                    help="screen width (default 80)")
     p.add_argument("--pace-cps", type=int, default=0,
-                   help="cap output chars/sec (0=off); use for no flow control")
+                   help="cap output chars/sec (0=off); needed for the plain BASIC/"
+                        "terminal clients only - the IIgs client has a ring buffer")
     p.add_argument("--no-echo", action="store_true",
                    help="don't echo typed chars (turn ON local echo on the II)")
 
     p.add_argument("--app", action="store_true",
                    help="native-client protocol: no echo/banner/prompts, EOT after "
-                        "each reply (for apple2/CLAUDE.APP.bas.txt)")
+                        "each reply (for apple2gs/claude.s or apple2/CLAUDE.APP.bas.txt)")
     p.add_argument("--bootstrap", metavar="FILE",
                    help="app mode: stream this raw binary to $4000 on the IIgs and "
                         "run it (a diskless RAM-load), then serve it")
