@@ -444,6 +444,14 @@ def main(argv=None) -> int:
     elif not args.pair_code:
         args.pair_code = ""
 
+    print(r"""
+  ____ _                 _        ____          _
+ / ___| | __ _ _   _  __| | ___  / ___|___   __| | ___
+| |   | |/ _` | | | |/ _` |/ _ \| |   / _ \ / _` |/ _ \
+| |___| | (_| | |_| | (_| |  __/| |__| (_) | (_| |  __/
+ \____|_|\__,_|\__,_|\__,_|\___| \____\___/ \__,_|\___|
+             terminal bridge for the Apple ][
+""")
     print(f"[bridge] {transport.describe()}")
     print(f"[bridge] {args.cols} cols, backend={args.backend}"
           f"{', app protocol' if args.app else ''}. Ctrl-C to stop.")
