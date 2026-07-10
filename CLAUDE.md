@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A bridge that turns a real Apple IIe/IIc/IIgs into a terminal for Claude. Two halves that must stay in sync:
 
 - **`bridge/`** — Python, runs on a modern host. Reads a line from the Apple II, sends it to Claude, streams the reply back flattened to 7-bit ASCII and word-wrapped to 40/80 cols.
-- **`apple2gs/claude.s`** — the primary client: a 65816 assembly program running in IIgs **Super Hi-Res 640 mode** (4 colors) that draws the whole Claude Code–style UI (scrolling transcript, mascot, pinned input box). `apple2/*.bas` are simpler text-mode BASIC clients; a stock serial terminal also works as a fallback.
+- **`apple2gs/claude.s`** — the primary client: a 65816 assembly program running in IIgs **Super Hi-Res 640 mode** (4 colors). Boot flow: hardware init → `scc_init` → boot menu (Connect / Hayes AT console / Instructions / Quit to BASIC) with the animated Clawd splash looping behind it → Connect dials the modem and enters the session UI (scrolling transcript, static mascot, spinner, scrollback). `apple2/*.bas` are simpler text-mode BASIC clients; a stock serial terminal also works as a fallback.
 
 The bridge sends **only** printable ASCII + CR/LF plus a small in-band control scheme (below). All layout and color live on the Apple II side.
 
@@ -22,12 +22,13 @@ The bridge sends **only** printable ASCII + CR/LF plus a small in-band control s
 Build/preview/run the IIgs client (from `apple2gs/`):
 
 ```bash
-./build.sh                 # gen_assets.py -> ca65/ld65 -> DOS 3.3 disk -> ~/Downloads/CLAUDEG.dsk
-python3 gen_assets.py      # regenerate assets.inc (font + mascot + bullet) only
+./build.sh                 # gen_assets.py -> ca65/ld65 -> inject into DOS 3.3 master -> ~/Downloads/CLAUDEG.dsk
+python3 gen_assets.py      # regenerate assets.inc (palettes, font, mascot, splash frames) only
 python3 preview.py assets.inc out.png   # render the SHR screen to PNG WITHOUT an emulator
+../tools/install-sd.sh     # put the built image on a FloppyEmu SD card safely
 ```
 
-`build.sh` needs the `cc65` toolchain (`ca65`/`ld65`) and the dos33fsprogs utilities at `/tmp/dos33fsprogs/…`.
+`build.sh` needs the `cc65` toolchain (`ca65`/`ld65`), the dos33fsprogs utilities at `/tmp/dos33fsprogs/…`, and Python with **Pillow** (`gen_assets.py` decodes `clawd.gif` at build time to generate the splash frames). The output disk is the vendored DOS 3.3 System Master (`dos33-master-jan83.dsk`) with HELLO replaced and COBJ added — never a from-scratch image.
 
 Run the bridge against KEGS (KEGS F4 → Serial Slot 2 → **Incoming**, which listens on TCP 6502):
 
@@ -59,8 +60,19 @@ The reply stream carries a few control bytes the native client interprets (kept 
 
 - `0x01 <n>` — set text color: `1`=gray (reply/input), `2`=coral (mascot/titles/footer), `3`=white (your messages, inline code).
 - `0x02` — draw the white reply bullet.
+- `0x0E` — header frame follows (one CR-terminated line per header row); sent at boot and before each reply.
 
 These are injected in `bridge.py:run_app_session` (bullet, footer) and inside `render.py` (inline/fenced `code` spans → white). `to_ascii` deliberately **passes through bytes 1–3** rather than dropping them; the client's `recv_reply`/`spinner` intercept them before `cout`. Color markers currently count toward wrap width, so code-dense lines may wrap a few columns early.
+
+## The splash pipeline
+
+`gen_assets.py` machine-ports `clawd.gif` into SHR frames at build time. Rules encoded there were each learned the hard way — violating them reintroduces fixed bugs:
+
+- Frames are quantized at **half the gif's 5.75px pitch** (the spritesheet's true art grid).
+- Typing poses are substituted from the spritesheet by **best-match, anchored on coral body cells only** — first-match substitution and prop-anchoring both produced wrong frames. Never substitute the stand pose (it kills the intro/outro acting).
+- Gif colors are darker than sheet colors — the classifier's lum≥118 split is gif-tuned.
+- All gray cells are erased (anti-aliasing artifacts) and a rigid keyboard sprite is stamped instead: parked on the table during typing (`rest_x`, deliberately 1 column nearer Clawd), tilted in flight.
+- The session mascot is the original hand-drawn critter, **deliberately static** — Wells does not want it animated.
 
 ## Non-obvious constraints & gotchas
 

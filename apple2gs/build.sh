@@ -27,5 +27,6 @@ $DOS33 -y CLAUDEG.dsk DELETE HELLO
 $DOS33 -y CLAUDEG.dsk SAVE A HH HELLO
 $DOS33 -a 0x4000 CLAUDEG.dsk BSAVE COBJ COBJ
 $DOS33 CLAUDEG.dsk CATALOG
-cp CLAUDEG.dsk /Users/wells/Downloads/CLAUDEG.dsk
-echo "=== deployed Downloads/CLAUDEG.dsk (master-based, FloppyEmu-ready) ==="
+# convenience deploy for KEGS (~/config.kegs boots this path); harmless if absent
+cp CLAUDEG.dsk "$HOME/Downloads/CLAUDEG.dsk" 2>/dev/null || true
+echo "=== built CLAUDEG.dsk (master-based, boots KEGS + FloppyEmu + real drives) ==="

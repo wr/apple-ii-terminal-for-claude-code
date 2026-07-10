@@ -1,138 +1,181 @@
-# CLAUDE ][
+# Claude Code ][
 
-Talk to Claude from a real Apple IIgs or IIc.
+Claude Code on a real Apple IIgs.
 
-The Apple II can't do TLS or JSON, so it can't reach the Claude API on its own.
-Instead it acts as a glass terminal: a small Python bridge runs on a modern
-machine, reads the line you type on the II, calls Claude, and streams the reply
-back word-wrapped for a 40- or 80-column screen.
+![The session screen: coral mascot, header, and a scrolling transcript in Super Hi-Res 640 mode](docs/session-preview.png)
+
+A native 65816 client draws a Claude Code-style terminal on the IIgs's Super
+Hi-Res screen: boot menu, animated Clawd splash while the modem dials, then a
+session with a scrolling transcript, thinking spinner, and scrollback. A small
+Python bridge on a modern computer runs the real `claude` CLI and shuttles
+plain ASCII back and forth over a serial link or a WiFi modem. The Apple II
+draws everything; the bridge handles everything that needs this century.
+
+No IIgs? The bridge also speaks plain 40/80-column text, so any Apple II with
+a terminal program (or a stock IIc over a serial cable) can talk to Claude the
+glass-teletype way. See [apple2/TERMINAL-SETUP.md](apple2/TERMINAL-SETUP.md).
+
+## What's here
 
 ```
- [Apple IIgs / IIc]  <-- serial or telnet -->  [bridge.py]  <-- HTTPS -->  [Claude]
-   dumb terminal                                your Mac / a Pi
+apple2gs/   the IIgs client: claude.s (65816, SHR 640 mode), asset pipeline,
+            build script, serial LOADER listing (BOOTSTRAP.bas.txt)
+bridge/     the Python bridge: serial/TCP transports, chat + code backends,
+            Markdown -> 7-bit ASCII rendering
+apple2/     simpler text-mode BASIC clients + terminal setup guide
+tools/      install-sd.sh (FloppyEmu SD installer), fatmap.py (FAT forensics)
+docs/       screenshots
 ```
 
-## Two ways to connect
+## Try it without hardware (KEGS)
 
-- **Serial** — a USB-serial cable straight into the II's serial port. Works on
-  both machines, no extra hardware. Start here.
-- **Telnet** — a WiFi modem (ESP-based) or an Uthernet card on the IIgs. The II
-  "dials out" over TCP. Slicker, but needs the modem configured.
-
-## Two things Claude can do
-
-- **chat** (default) — plain Q&A. Nothing runs on the host. Safe and bounded.
-- **code** — the real `claude` CLI. It reads files, edits them, and runs
-  commands **on the bridge host**. Switch to it live with `/mode code`.
-
-## Setup
-
-```sh
-cd bridge
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...        # only needed for chat mode
-```
-
-Code mode uses the `claude` CLI already on this machine — no API key needed for
-that path (it uses whatever `claude` is logged in as).
-
-## Run it
-
-Serial (find your device with `ls /dev/tty.usb*` on a Mac):
-
-```sh
-python3 bridge.py --serial /dev/tty.usbserial-1420 --baud 9600 --cols 80
-```
-
-Telnet / WiFi modem:
-
-```sh
-python3 bridge.py --telnet --port 6400 --cols 80
-```
-
-Then bring up a terminal program on the Apple II and connect. See
-[apple2/TERMINAL-SETUP.md](apple2/TERMINAL-SETUP.md) for cabling, baud, and
-per-machine terminal settings.
-
-Once connected, type `/help`.
-
-## Testing with KEGS (no hardware)
-
-KEGS emulates the IIgs and its serial ports over TCP — great for trying this
-before you wire up the real machine.
-
-1. In KEGS, press **F4** → Serial Port Configuration → set **Slot 2** to
-   **Incoming**. KEGS now listens on TCP **6502**.
-2. Dial into it from the bridge:
+1. Get `CLAUDE.dsk` — from the GitHub release, or build it yourself (below).
+2. In [KEGS](https://kegs.sourceforge.net/), press F4 → Serial Port
+   Configuration → set Slot 2 to **Incoming** (KEGS listens on TCP 6502), and
+   point slot 6 drive 1 at `CLAUDE.dsk`.
+3. Start the bridge and boot the emulator:
 
    ```sh
-   python3 bridge.py --connect 127.0.0.1:6502 --cols 80
+   cd bridge
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
+   python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
    ```
 
-   (If the bridge starts first, it waits and connects once KEGS is listening.)
-3. Inside KEGS, boot a terminal program (ProTERM/Spectrum from a disk image) set
-   to the modem port (Slot 2), or from Applesoft BASIC just type `IN#2` then
-   `PR#2` for a bare terminal. You'll see the `CLAUDE ][` banner.
+4. At the boot menu, choose **Connect**. Code mode drives whatever `claude`
+   CLI is installed on the host — no API key needed beyond that login.
 
-Alternatively, use KEGS's built-in modem: set Slot 2 to **Virtual modem** (F4),
-run the bridge as a server (`python3 bridge.py --telnet --port 8888`), and from
-the IIgs terminal type `ATDT 127.0.0.1:8888` to dial out. Incoming mode is
-simpler — no AT commands.
+## Real hardware
 
-## On-screen commands
+You need three things:
 
-| Command      | What it does                                   |
-|--------------|------------------------------------------------|
-| `/help`      | list commands                                  |
-| `/new`       | start a fresh conversation                     |
-| `/mode chat` | plain Q&A with Claude (safe)                    |
-| `/mode code` | real Claude Code — **edits files on the host** |
-| `/quit`      | hang up                                         |
+- an **Apple IIgs**
+- a **Hayes-compatible WiFi modem** on the modem port (WiModem 232 Pro,
+  Zimodem/RetroWiFi builds — anything that answers `ATD`)
+- a way to boot a 140K 5.25" disk image: a **FloppyEmu**, or a real drive and
+  a way to write floppies
 
-## Useful flags
+### One-time setup
 
-| Flag                     | Why                                                         |
-|--------------------------|-------------------------------------------------------------|
-| `--cols 40`              | 40-column screen instead of 80                              |
-| `--baud 19200`           | faster serial (IIc 6551 tops out ~19200; IIgs goes higher)  |
-| `--rtscts`               | hardware flow control (best at high baud, if your cable has RTS/CTS wired) |
-| `--xonxoff`              | software flow control (fallback)                            |
-| `--pace-cps 800`         | throttle output to N chars/sec when you have no flow control and see dropped characters |
-| `--no-echo`              | bridge stops echoing; turn ON local echo on the II instead  |
-| `--backend code`         | start in code mode                                          |
-| `--workdir ~/project`    | code mode: which directory Claude works in                  |
-| `--permission-mode acceptEdits` | code mode: let Claude edit without prompting (headless can't ask you) |
-| `--effort medium`        | chat mode: more thinking, slower replies (default `low`)    |
+1. **Bridge**, on the machine that has the `claude` CLI:
 
-## Dropped or doubled characters?
+   ```sh
+   python3 bridge.py --telnet --app --backend code --cols 80
+   ```
 
-- **Doubled characters** while typing → the II is echoing locally *and* the
-  bridge is echoing. Turn off local echo on the II, or run the bridge with
-  `--no-echo` and turn local echo on.
-- **Dropped characters** in Claude's replies at higher baud → the II can't keep
-  up. Add flow control (`--rtscts` if wired, else `--xonxoff`) or throttle with
-  `--pace-cps 600`.
-- **Garbage / high-bit characters** → set the terminal program to 8 data bits,
-  no parity, 1 stop bit, and strip/mask the high bit (most do by default).
+   It listens on TCP port 6400.
 
-## Layout
+2. **Modem**: store the bridge's address in the modem's phone book so the
+   client can dial it. On a WiModem 232:
 
+   ```
+   AT&Z0=192.168.1.50:6400     (your host's LAN IP)
+   AT&W
+   ```
+
+   The client dials phone book entry 0 (`ATDS=0`) at startup. Optional:
+   `AT*A1` makes the modem dial as soon as it powers on. The boot menu also
+   has a live AT console if your modem needs different commands.
+
+3. **Disk**: put the image on the FloppyEmu's SD card with the installer —
+
+   ```sh
+   tools/install-sd.sh CLAUDE.dsk /Volumes/YOURCARD
+   ```
+
+   A plain file copy usually works too, but FloppyEmu rejects image files
+   that land fragmented on the card's FAT filesystem ("file not contiguous"),
+   and macOS fragments them more often than you'd think. The installer
+   sidesteps that; if a card is already in a bad state, `tools/install-sd.sh
+   --repair` repacks it. Set the Emu to 5.25" mode — the disk boots from
+   slot 6.
+
+4. Boot the IIgs, pick **Connect** from the menu, and type at Claude.
+
+### Updating later
+
+Rebuild (or download the new release image), then either run `install-sd.sh`
+again — an existing image on the card is overwritten in place, which can't
+fragment — or skip the SD card entirely and update over the serial line: type
+in the short BASIC loader from
+[apple2gs/BOOTSTRAP.bas.txt](apple2gs/BOOTSTRAP.bas.txt) once, save it to
+disk, and from then on updating is `RUN LOADER` on the IIgs while the bridge
+runs with `--bootstrap ../apple2gs/COBJ`. The loader dials the bridge,
+receives the binary, checks a checksum, and saves it. Nothing in the loader
+is tied to a specific build.
+
+## The bridge on its own
+
+Two backends:
+
+- `--backend chat` (default) — plain Q&A against the Messages API. Needs
+  `ANTHROPIC_API_KEY` set. Nothing runs on the host.
+- `--backend code` — the real `claude` CLI. It reads files, edits them, and
+  runs commands **on the bridge host**, with all that implies. `--workdir`
+  picks the directory; `--permission-mode acceptEdits` lets it edit without
+  asking (a headless session can't prompt you).
+
+Slash commands typed on the II are handled by the bridge: `/help`, `/new`
+(fresh conversation), `/mode chat`, `/mode code`, `/quit`. Anything else goes
+to Claude.
+
+Flags worth knowing:
+
+| Flag | What it's for |
+|------|---------------|
+| `--serial PORT --baud N` | serial transport instead of TCP |
+| `--connect HOST:PORT` | dial out (KEGS "Incoming" mode) |
+| `--telnet --port N` | listen for a WiFi modem (default port 6400) |
+| `--app` | native-client protocol for the IIgs client: silent bridge, EOT-framed replies |
+| `--cols 40` | wrap for a 40-column screen |
+| `--pace-cps N` | throttle output — only needed for the text-mode clients; the IIgs client has its own receive buffer |
+| `--no-echo` | stop echoing typed characters (text clients with local echo) |
+| `--bootstrap FILE` | serve a client binary to the serial LOADER |
+| `--model`, `--effort` | model override / thinking effort (chat mode) |
+
+## Building from source
+
+Host-side you need [cc65](https://cc65.github.io/) (`brew install cc65`),
+[dos33fsprogs](https://github.com/deater/dos33fsprogs) built at
+`/tmp/dos33fsprogs`, and Python 3 with Pillow.
+
+```sh
+cd apple2gs
+./build.sh        # assets -> assemble -> link -> CLAUDE-ready disk image
 ```
-bridge/
-  bridge.py        entry point: CLI, session loop, /commands
-  transports.py    serial + TCP byte plumbing
-  terminal.py      line editing, echo, telnet, output pacing
-  render.py        Markdown -> ASCII, word-wrap, streaming formatter
-  backends.py      chat (Messages API) + code (claude CLI)
-  requirements.txt
-apple2/
-  TERMINAL-SETUP.md  wiring, pinouts, per-machine terminal config
+
+The build regenerates every asset from source each time: the font comes from
+unscii-8 (a real bitmap font — rasterized TTFs are mush at 8×8), and the
+entire splash animation is machine-ported from `clawd.gif` at build time,
+frame timing and all. The output disk is a pristine DOS 3.3 System Master
+with the client injected, which is exactly the image that boots KEGS, a
+FloppyEmu, and a real drive.
+
+To see the screen without booting an emulator:
+
+```sh
+python3 preview.py assets.inc out.png
 ```
 
-## How the pieces fit
+renders the session UI with the same pixel math as the client, at the real
+(narrow-pixel) display geometry. What the PNG shows is what the IIgs shows.
 
-`bridge.py` picks a **transport** (serial/TCP) and a **backend** (chat/code),
-wraps the connection in a `Terminal` (line editing + echo + pacing), and loops:
-read a line, stream it through the backend, and feed each chunk to a
-`StreamFormatter` that emits finished 40/80-column lines back to the II.
+## How it works
+
+The bridge reads a CR-terminated line from the II, feeds it to the backend,
+and streams the reply through a Markdown-flattening formatter that emits
+7-bit ASCII word-wrapped lines. In `--app` mode the reply carries a small
+in-band vocabulary the IIgs client understands — `0x01 n` selects a text
+color, `0x02` draws the reply bullet, `0x0E` frames the header, `0x04` (EOT)
+ends the reply — and the client's interrupt-safe ring buffer drains the
+serial port even while it's busy scrolling, so nothing drops at 9600 baud.
+
+Super Hi-Res 640 mode allows exactly four colors per scanline; the client
+spends them on black, gray, coral, and white, which is why the UI looks the
+way it does. Developer-level gotchas (SCC init on real metal, zero-page
+landmines, 65816 width tracking) live in [CLAUDE.md](CLAUDE.md).
+
+## License
+
+MIT. The unscii font is CC0. `clawd.gif` and the DOS 3.3 System Master image
+remain their respective owners'.

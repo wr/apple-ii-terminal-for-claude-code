@@ -1,4 +1,10 @@
-# Apple II terminal setup
+# Apple II terminal setup (text-mode path)
+
+This is the simpler alternative to the native IIgs graphics client: any Apple
+II with a terminal program (or the IIc's built-in firmware terminal) talking
+plain 40/80-column text to the bridge. Run the bridge **without** `--app` for
+this path. If you have a IIgs and want the full Claude Code-style UI, see the
+main [README](../README.md) instead.
 
 How to get your IIgs or IIc talking to the bridge. Two paths: a **serial cable**
 (works on both machines) or a **WiFi modem / network** (IIgs).
@@ -70,7 +76,8 @@ bridge with `--pace-cps 600`.
 
 ### IIgs
 
-Use a real comms program — load it from the BlueSCSI:
+Use a real comms program, booted from whatever storage you have (FloppyEmu,
+BlueSCSI, real disks):
 
 - **ProTERM**, **Spectrum**, or **Talk Is Cheap** are the classics.
 - Set the connection to the serial port you wired (modem port), 9600 8N1,
@@ -78,8 +85,6 @@ Use a real comms program — load it from the BlueSCSI:
 - Terminal emulation: plain **TTY/glass-tty** is safest. The bridge sends only
   ASCII and CR/LF, so you don't need ANSI or VT100. If your program defaults to
   VT100, that's fine too.
-
-Put a disk image with your comms program onto the BlueSCSI and boot it.
 
 ### IIc
 
