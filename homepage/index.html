@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<!-- =============================================== -->
+<!--  WELLS' APPLE IIGS PAGE - est. 1997 (ok, 2026)  -->
+<!--  hand-coded in SimpleText, honest               -->
+<!-- =============================================== -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>*~* ALL ABOUT MY IIGS *~* Wells' Apple II Page</title>
+<style>
+/* period-correct: everything is a table and God's default fonts */
+body {
+  background-color: #008080;
+  /* tiled "texture" background, the GeoCities way */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect width='40' height='40' fill='%23008080'/%3E%3Crect x='0' y='0' width='20' height='20' fill='%23079191' opacity='.5'/%3E%3Crect x='20' y='20' width='20' height='20' fill='%23006e6e' opacity='.6'/%3E%3Ccircle cx='10' cy='30' r='1.5' fill='%2333aaaa'/%3E%3Ccircle cx='30' cy='10' r='1.5' fill='%23005f5f'/%3E%3C/svg%3E");
+  font-family: "Times New Roman", Times, serif;
+  color: #000000;
+  margin: 0;
+  padding: 12px;
+}
+.page {
+  width: 760px;
+  max-width: 100%;
+  margin: 0 auto;
+  background: #c0c0c0;
+  border: 4px ridge #ffffff;
+  padding: 10px;
+  box-sizing: border-box;
+}
+h1 {
+  font-family: "Comic Sans MS", "Comic Sans", cursive;
+  color: #ff00ff;
+  text-shadow: 2px 2px 0 #000080;
+  font-size: 2.2em;
+  margin: 8px 0 0 0;
+}
+h2 {
+  font-family: "Comic Sans MS", "Comic Sans", cursive;
+  color: #000080;
+  background: #ffff00;
+  border: 2px outset #ffffff;
+  padding: 2px 10px;
+  font-size: 1.3em;
+  display: inline-block;
+  margin: 18px 0 6px 0;
+}
+a { color: #0000ee; }
+a:visited { color: #551a8b; }
+a:focus-visible { outline: 3px dotted #ff00ff; }
+.blink { animation: blink 1s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+.rainbow-hr {
+  height: 8px;
+  border: 1px solid #000;
+  background: repeating-linear-gradient(90deg,
+    #ff0000 0 40px, #ff9900 40px 80px, #ffff00 80px 120px,
+    #00cc00 120px 160px, #0000ff 160px 200px, #9900cc 200px 240px);
+  margin: 14px 0;
+}
+.newflame {
+  font-family: Arial, sans-serif;
+  font-weight: bold;
+  font-size: .8em;
+  color: #fff;
+  background: linear-gradient(180deg, #ff0000, #ff9900);
+  padding: 0 4px;
+  border: 1px solid #800000;
+  animation: flame .6s alternate infinite;
+}
+@keyframes flame { from { filter: brightness(1); } to { filter: brightness(1.5); } }
+/* the fake odometer hit counter */
+.counter span {
+  display: inline-block;
+  background: #000;
+  color: #00ff00;
+  font-family: "Courier New", monospace;
+  font-weight: bold;
+  font-size: 1.4em;
+  padding: 2px 5px;
+  border: 2px inset #808080;
+  margin: 0 1px;
+}
+/* under construction barrier stripes */
+.constr {
+  background: repeating-linear-gradient(45deg, #ffcc00 0 14px, #000 14px 28px);
+  border: 2px solid #000;
+  padding: 6px;
+  text-align: center;
+}
+.constr b {
+  background: #fff;
+  padding: 2px 10px;
+  font-family: Arial, sans-serif;
+}
+/* THE SIGNATURE: a fake screenshot of the real SHR Claude terminal */
+.shr {
+  background: #000;
+  border: 14px solid #d6cdb8;      /* platinum IIgs monitor bezel */
+  border-radius: 10px;
+  box-shadow: inset 0 0 30px rgba(0,255,255,.08);
+  font-family: "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 12px 16px;
+  color: #aaaaaa;                   /* the 640-mode gray */
+  overflow-x: auto;
+  white-space: pre;
+}
+.shr .coral { color: #ff8866; }     /* mascot / titles / footer */
+.shr .white { color: #ffffff; }     /* your messages, inline code */
+.shr .cursor { background: #aaaaaa; color: #000; animation: blink 1s steps(2,start) infinite; }
+/* 88x31 badge wall */
+.badge {
+  display: inline-block;
+  width: 88px;
+  height: 31px;
+  font-family: Arial, sans-serif;
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+  border: 2px outset #fff;
+  margin: 2px;
+  line-height: 1.1;
+  padding-top: 4px;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+table.layout { width: 100%; border-collapse: collapse; }
+table.layout td { vertical-align: top; padding: 6px; }
+td.sidebar {
+  width: 150px;
+  background: #000080;
+  color: #ffff00;
+  font-family: Arial, sans-serif;
+  font-size: .85em;
+}
+td.sidebar a { color: #00ffff; display: block; margin: 6px 0; }
+.specs td { border: 1px solid #808080; padding: 2px 8px; background: #fff; }
+.specs th { background: #000080; color: #fff; padding: 2px 8px; font-family: Arial, sans-serif; }
+marquee { background: #000; color: #00ff00; font-family: "Courier New", monospace; padding: 3px; }
+.guestbook {
+  background: #ffffcc;
+  border: 3px double #800000;
+  padding: 8px;
+  font-size: .95em;
+}
+.footer { text-align: center; font-size: .8em; color: #333; }
+@media (prefers-reduced-motion: reduce) {
+  .blink, .newflame, .shr .cursor, marquee { animation: none; }
+  marquee { overflow: visible; }
+}
+@media (max-width: 600px) {
+  td.sidebar { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<center>
+<marquee scrollamount="6">&gt;&gt;&gt; WELCOME TO MY HOMEPAGE ON THE INFORMATION SUPERHIGHWAY!!! THE APPLE IIGS: STILL THE BEST COMPUTER APPLE EVER MADE. FIGHT ME. &lt;&lt;&lt;</marquee>
+
+<h1>~*~ ALL ABOUT MY IIGS ~*~</h1>
+<span style="font-family: Arial; font-size:.9em;">Wells' little corner of cyberspace &bull; Apple II Forever!</span>
+
+<div class="rainbow-hr"></div>
+
+<p>You are visitor number:<br>
+<span class="counter" aria-label="visitor counter: 001337"><span>0</span><span>0</span><span>1</span><span>3</span><span>3</span><span>7</span></span><br>
+<span style="font-size:.75em;">(counter courtesy of my own darn web server, cgi-bin 4 life)</span></p>
+</center>
+
+<table class="layout">
+<tr>
+<td class="sidebar">
+  <b>&#9733; NAVIGATION &#9733;</b>
+  <a href="#rig">My Rig</a>
+  <a href="#claude">The AI Project</a> <span class="newflame">NEW!</span>
+  <a href="#specs">GS Specs</a>
+  <a href="#links">Kewl Links</a>
+  <a href="#guestbook">Guestbook</a>
+  <br><br>
+  <b>&#9835; NOW PLAYING &#9835;</b><br>
+  <span style="color:#fff;">tass_times.mid</span><br>
+  <a href="#" onclick="alert('the midi never stops. it never stopped.');return false;">[ stop ]</a>
+  <br><br>
+  <span style="font-size:.9em; color:#aaa;">Best viewed in Netscape Navigator 4.0 at 640x480, just like my GS</span>
+</td>
+<td>
+
+<h2 id="rig">&#128190; My Rig</h2>
+<p>Behold: an <b>Apple IIgs</b> in gorgeous platinum, purring along at a blistering <b>2.8 MHz</b>. But this is no museum piece, friend. This machine is <i>modernized</i>:</p>
+<ul>
+<li><b>WiModem 232 Pro</b> on the modem port &mdash; it thinks it's dialing a BBS, it's actually doing TCP over my WiFi. The 90s dream, realized.</li>
+<li><b>FloppyEmu</b> standing in for the Disk II &mdash; a whole shoebox of floppies on one SD card. (Just never, EVER copy files onto the card wrong or you get the dreaded "file not contiguous". Ask me how I know.)</li>
+<li>The classic <b>AppleColor RGB monitor</b>, still crispy after all these years.</li>
+</ul>
+
+<div class="constr"><b>&#9888; UNDER CONSTRUCTION &#9888; &mdash; photo gallery coming soon (once I figure out where I put the digital camera)</b></div>
+
+<h2 id="claude">&#129302; The AI Project <span class="newflame">NEW!</span></h2>
+<p>OK so here's the crazy part. I hooked the GS up to <b>Claude</b>, an AI from the future. A little bridge program on my Mac reads what I type on the GS, sends it to the AI, and streams the answer back over the modem port. The GS side is <b>pure 65816 assembly</b> running in Super Hi-Res 640 mode &mdash; all four glorious colors of it.</p>
+
+<p><b>Actual screenshot*</b> <span style="font-size:.8em;">(*lovingly re-typed because screen capture on a IIgs is a whole thing)</span></p>
+
+<div class="shr" role="img" aria-label="The Apple IIgs Super Hi-Res screen running the Claude terminal">
+<span class="coral">  (\_/)
+  (o.o)   CLAUDE for the Apple IIgs
+  / &gt; &#9829;   ------------------------</span>
+
+<span class="white">&gt; how do I get this thing on the internet</span>
+
+<span class="white">&#9679;</span> Your WiModem is already doing the hard part.
+  Type <span class="white">ATDS=0</span> and it dials straight into the
+  bridge -- no acoustic coupler required.
+
+<span class="coral">&#10035; Worked for 4s</span>
+
+<span class="white">&gt; _</span><span class="cursor">&nbsp;</span>
+</div>
+
+<p>Yes, the AI runs at 9600 baud. Yes, watching it think in real time on 40-year-old hardware absolutely rules. The whole thing (bridge + assembly source) lives on my hard drive next to about 400 unfinished projects.</p>
+
+<h2 id="specs">&#128203; GS Specs (for the nerds)</h2>
+<center>
+<table class="specs">
+<tr><th>Thing</th><th>What it's got</th></tr>
+<tr><td>CPU</td><td>65C816 @ 2.8 MHz ("fast mode", lol)</td></tr>
+<tr><td>Graphics</td><td>Super Hi-Res: 640x200 in 4 colors or 320x200 in 16</td></tr>
+<tr><td>Sound</td><td>Ensoniq DOC, 32 channels &mdash; better than a Sound Blaster, sorry PC kids</td></tr>
+<tr><td>Serial</td><td>Zilog 8530 SCC (temperamental little gremlin)</td></tr>
+<tr><td>Vibes</td><td>Immaculate</td></tr>
+</table>
+</center>
+
+<h2 id="links">&#128279; Kewl Links</h2>
+<ul>
+<li><a href="https://www.apple.asimov.net/">Asimov</a> &mdash; THE Apple II software archive</li>
+<li><a href="https://groups.google.com/g/comp.sys.apple2">comp.sys.apple2</a> &mdash; the newsgroup lives!!</li>
+<li><a href="https://kegs.sourceforge.net/">KEGS</a> &mdash; a IIgs inside your other computer</li>
+<li><a href="https://cc65.github.io/">cc65 / ca65</a> &mdash; how the assembly sausage gets made</li>
+<li><a href="https://www.bigmessowires.com/floppy-emu/">FloppyEmu</a> &mdash; buy one, thank me later</li>
+</ul>
+
+<h2 id="guestbook">&#9997; Guestbook</h2>
+<div class="guestbook">
+<p><b class="blink">SIGN MY GUESTBOOK!!!</b> (guestbook CGI script is, you guessed it, under construction)</p>
+<p><i>"cool page. needs more frames"</i> &mdash; xX_woz_fan_Xx, 07/04/2026</p>
+<p><i>"ATDS=0 changed my life"</i> &mdash; some guy on the BBS</p>
+</div>
+
+</td>
+</tr>
+</table>
+
+<div class="rainbow-hr"></div>
+
+<center>
+<a class="badge" href="#" style="background:#000; color:#0f0;">MADE WITH<br>SimpleText</a><a class="badge" href="#" style="background:#000080; color:#fff;">Netscape<br>NOW! 4.0</a><a class="badge" href="#" style="background:linear-gradient(90deg,#61bb46,#fdb827,#f5821f,#e03a3e,#963d97,#009ddc); color:#fff; text-shadow:1px 1px 0 #000;">APPLE II<br>FOREVER</a><a class="badge" href="#" style="background:#fff; color:#c00;">Y2K<br>SURVIVOR</a><a class="badge" href="#" style="background:#ffcc00; color:#000;">9600 BAUD<br>&amp; PROUD</a>
+
+<p class="footer">
+Last updated: July 9, 2026 &bull; <a href="mailto:media [at] wells [dot] ee">email me</a> &bull; hosted from a machine older than the Web itself (spiritually)<br>
+&lt;/center&gt; tags left unclosed in loving memory of GeoCities, 1994&ndash;2009
+</p>
+</center>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,52 @@
+A tiny Applesoft terminal for the Apple IIgs modem port (slot 2), talking to
+the SCC chip directly. Use this instead of the firmware terminal mode (IN#2 +
+Ctrl-A T), which does not work reliably under KEGS.
+
+It pokes the Zilog 8530 SCC channel B registers directly:
+  $C038 (49208) = command/status  (bit 0 = Rx char ready, bit 2 = Tx empty)
+  $C03A (49210) = data
+Keyboard: $C000 (49152) high bit set = key ready; $C010 (49168) clears strobe.
+
+No baud/format setup is needed under KEGS (it's a socket). On real hardware the
+Control Panel setting is NOT enough: the IIgs never initializes the SCC at
+power-on, so the port is dead until a program sets clocks and enables Rx/Tx
+(Apple IIgs TN #018). Lines 22-24 below do that — 9600 8N1, polled. Harmless
+under KEGS.
+
+Type this in at the ] prompt exactly, then RUN. Ctrl-C stops it.
+
+10 SB=49208:DB=49210
+20 KB=49152:KS=49168
+22 S=PEEK(SB)
+23 FOR J=1 TO 12:READ R,V:POKE SB,R:POKE SB,V:NEXT
+24 DATA 9,64,4,68,3,192,5,234,11,80,12,10
+25 DATA 13,0,14,1,15,0,1,0,9,0,3,193
+30 S=PEEK(SB)
+40 IF INT(S/2)*2=S THEN 70
+50 C=PEEK(DB):C=C-INT(C/128)*128
+60 IF C<>10 THEN PRINT CHR$(C);
+70 IF PEEK(KB)<128 THEN 30
+80 K=PEEK(KB)-128
+90 POKE KS,0
+110 POKE DB,K
+120 GOTO 30
+
+IMPORTANT: Applesoft AND/OR are LOGICAL, not bitwise. To test a bit, use
+arithmetic:
+  bit 0 set (odd)?   INT(S/2)*2 <> S
+  strip high bit:    C - INT(C/128)*128   (i.e. C mod 128)
+Do NOT write "S AND 1" or "PEEK(DB) AND 127" -- that returns 0/1, not the bit.
+The old transmit-wait on the Tx-empty bit is dropped; a single typed char never
+overruns the buffer, so we just poke it.
+
+How it works, line by line:
+  30-60  if a byte arrived from the port, print it (skip LF so lines don't
+         double-space; CR from the bridge acts as the newline)
+  70-110 if a key was pressed, strip the high bit and send it out the port
+         when the transmitter is ready
+  120    loop forever
+
+Notes:
+  - Characters you type appear only after the bridge echoes them back (remote
+    echo), so there is no local doubling.
+  - It is slow (Applesoft polling), so long replies paint gradually. That's fine.

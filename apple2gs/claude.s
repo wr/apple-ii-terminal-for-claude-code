@@ -1,0 +1,2189 @@
+; CLAUDE ][ GS - SHR graphics client (640 mode, 4 colors, 80x25 text).
+; Scrolling transcript + pinned input box + serial link to the bridge.
+; Targets the IIgs SCC (slot 2, channel B) as used by KEGS Incoming mode.
+; Loaded by DOS 3.3 BRUN at $4000; runs in 65816 native mode.
+
+.setcpu "65816"
+.segment "CODE"
+.a8
+.i8
+
+; ---- zero page ----
+destptr = $E0          ; 3 bytes: screen addr + bank ($E1)
+strptr  = $E4          ; word: string pointer (bank 0)
+glyphptr= $E6          ; word: font glyph pointer (bank 0)
+curcol  = $E8          ; word: transcript column 0-79
+currow  = $EA          ; word: transcript row
+txtcolor= $EC          ; byte: color 0-3
+coloff  = $ED          ; byte: txtcolor*16
+tmp     = $EE          ; word scratch
+srcp    = $08          ; word: splash draw source pointer ($08-$09 free)
+srcrow  = $FD          ; word: splash row-start ($FD-$FE free; NOT $EB-$EE,
+                       ;  those are txtcolor/coloff/tmp!)
+tmp2    = $06          ; word scratch ($06-$07: free under Applesoft/ProDOS.
+                       ;  NOT $D6 - that's Applesoft's auto-RUN lock flag, and
+                       ;  scribbling on it wrecks BASIC after Ctrl-Reset)
+rowcnt  = $DF          ; byte scratch
+linelen = $DE          ; byte: input length
+savecol = $DC          ; word: saved transcript col
+saverow = $DA          ; word: saved transcript row
+frame   = $D9          ; byte: spinner frame
+firstbyte = $D5        ; byte: first real reply byte stashed by spinner
+havefirst = $D4        ; byte: nonzero if firstbyte is valid
+srcptr  = $D0          ; 3 bytes: scroll source pointer + bank ($D2)
+colorpend = $D3        ; byte: nonzero if next reply byte is a color value
+spinword = $D7         ; byte: index of current "thinking" word
+bufptr  = $FA          ; 3 bytes: scrollback line pointer + bank ($FC).
+                       ;  NOT $B0-$B2 - that's inside Applesoft's CHRGET
+                       ;  routine (live code!); overwriting it breaks all of
+                       ;  BASIC after Ctrl-Reset until a full reboot
+
+; ---- layout (text rows 0-24) ----
+TOP_ROW   = 0          ; scroll region top (header lives here and scrolls away)
+START_ROW = 5          ; where the transcript cursor begins (below the header)
+BOT_ROW   = 20         ; transcript bottom
+RULE1_ROW = 21
+INPUT_ROW = 22
+RULE2_ROW = 23
+
+; ---- SHR / IO ----
+SHR_BASE   = $2000
+NEWVIDEO   = $C029
+BORDERCOL  = $C034
+KBD        = $C000
+KBDSTRB    = $C010
+RDVBL      = $C019     ; bit7 toggles each vertical-blank (~60Hz)
+SCC_STAT   = $C038     ; RR0: bit0=Rx avail, bit2=Tx empty
+SCC_DATA   = $C03A
+RBUF       = $1E00     ; 256-byte serial Rx ring buffer (bank 0, below the code)
+EOT        = $04
+CMD_COLOR  = $01       ; in-band: next byte sets txtcolor (1 gray/2 coral/3 white)
+CMD_BULLET = $02       ; in-band: draw the white reply bullet here
+CMD_HEADER = $0E       ; in-band: header frame follows (title CR subtitle CR)
+
+; ---- scrollback ring buffer (bank $02): each line = 80 cells of (char,color) ----
+BUF_BANK   = $02
+BUF_LINES  = 128
+BUF_STRIDE = 160       ; 80 cells * 2 bytes
+CELL_BULLET = $01      ; stored-char value meaning "the reply bullet glyph"
+SCROLL_STEP = 3        ; lines moved per arrow press
+
+; set curcol/currow/txtcolor/strptr and draw a string
+.macro TEXT lbl, col, row, colr
+        rep     #$20
+        .a16
+        lda     #col
+        sta     curcol
+        lda     #row
+        sta     currow
+        lda     #lbl
+        sta     strptr
+        sep     #$20
+        .a8
+        lda     #colr
+        sta     txtcolor
+        jsr     draw_str
+.endmacro
+
+.a8
+.i8
+start:
+        sei
+        clc
+        xce
+        rep     #$30
+        .a16
+        .i16
+        ldx     #$01FF
+        txs
+        sep     #$20
+        .a8
+        lda     #$E1
+        sta     destptr+2
+        stz     rb_head         ; ring buffer is used during the splash
+        stz     rb_tail         ; (vbl_edge polls) - init before anything serial
+        stz     blk_prev
+        stz     blk_cnt
+        stz     menusel
+
+        lda     #$C1
+        sta     NEWVIDEO
+        lda     BORDERCOL
+        and     #$F0
+        sta     BORDERCOL
+
+        ; SCBs = $80 (640 mode)
+        rep     #$30
+        .a16
+        lda     #$8080
+        ldx     #$0000
+@sc:    sta     f:$E19D00,x
+        inx
+        inx
+        cpx     #200
+        bne     @sc
+        ; palette
+        ldx     #$0000
+@pc:    lda     shr_palette,x
+        sta     f:$E19E00,x
+        inx
+        inx
+        cpx     #32
+        bne     @pc
+        jsr     clear_screen
+
+        ; ---- splash: Clawd-does-his-laptop-act while the modem dials ----
+        ; splash palette: entry 1 = the sprite's shadow coral (restored at
+        ; teardown, where entry 1 goes back to the UI gray)
+        rep     #$30
+        .a16
+        .i16
+        ldx     #0
+@spal:  lda     shr_palette_splash,x
+        sta     f:$E19E00,x
+        inx
+        inx
+        cpx     #32
+        bne     @spal
+        sep     #$20
+        .a8
+        sep     #$10
+        .i8
+        lda     #0
+        jsr     splash_frame
+
+        jsr     scc_init        ; real hardware: the port is dead until programmed
+        lda     BORDERCOL
+        and     #$F0
+        ora     #$0F            ; DEBUG breadcrumb: WHITE border = SCC programmed
+        sta     BORDERCOL
+        and     #$F0            ; (dialing now happens from the menu)
+        sta     BORDERCOL
+
+        TEXT    str_welcome, 27, 16, 2
+        TEXT    str_ver, 37, 17, 3
+        TEXT    str_by, 31, 18, 3
+
+; =====================================================================
+; boot menu - the act loops above it forever, keys work immediately.
+; anim_ix/anim_cd walk splash_seq (frame, vblanks, ..., $FF wraps).
+; The whole boot phase runs the splash palette (shadow coral + platinum);
+; the session palette loads at Connect.
+; =====================================================================
+menu_screen:
+        .a8
+        .i8
+        jsr     clear_screen
+        TEXT    str_welcome, 27, 16, 2
+        TEXT    str_ver, 37, 17, 3
+        TEXT    str_by, 31, 18, 3
+        stz     anim_ix
+        lda     #1
+        sta     anim_cd
+menu_loop:
+        jsr     menu_draw
+mk_wait:
+        jsr     rb_poll
+        lda     KBD
+        bmi     mk_key
+        jsr     vbl_edge        ; one ~60Hz tick paces the animation
+        dec     anim_cd
+        bne     mk_wait
+        ldx     anim_ix         ; countdown done: next storyboard entry
+        lda     splash_seq,x
+        cmp     #$FF
+        bne     ma_go
+        ldx     #0
+        lda     splash_seq,x
+ma_go:
+        phx
+        jsr     splash_frame
+        plx
+        inx
+        lda     splash_seq,x
+        sta     anim_cd
+        inx
+        stx     anim_ix
+        bra     mk_wait
+mk_key:
+        sta     KBDSTRB
+        and     #$7F
+        cmp     #$0B            ; up arrow
+        beq     mk_up
+        cmp     #$0A            ; down arrow
+        beq     mk_dn
+        cmp     #$0D            ; Return
+        beq     mk_go
+        cmp     #'1'
+        bcc     mk_wait
+        cmp     #'5'
+        bcs     mk_wait
+        sec
+        sbc     #'1'
+        sta     menusel         ; digit = select and run
+        bra     mk_go
+mk_up:
+        lda     menusel
+        beq     mk_wait
+        dec     menusel
+        jmp     menu_loop
+mk_dn:
+        lda     menusel
+        cmp     #3
+        bcs     mk_wait
+        inc     menusel
+        jmp     menu_loop
+mk_go:
+        lda     menusel
+        beq     act_connect
+        cmp     #1
+        beq     mk_modem
+        cmp     #2
+        beq     mk_instr
+        jmp     act_quit
+mk_modem:
+        jmp     page_modem
+mk_instr:
+        jmp     page_instr
+
+; connect: wipe the menu, dial, spin for ~3s, then the session
+act_connect:
+        lda     #20
+        jsr     clear_rowA
+        lda     #21
+        jsr     clear_rowA
+        lda     #22
+        jsr     clear_rowA
+        lda     #23
+        jsr     clear_rowA
+        TEXT    str_dial, 36, 21, 2
+        jsr     modem_dial
+        ldx     #30             ; 30 beats of 6 vblanks = ~3s
+ac_lp:
+        phx
+        txa
+        and     #$03
+        tax
+        lda     dial_glyphs,x
+        pha
+        rep     #$20
+        .a16
+        lda     #34
+        sta     curcol
+        lda     #21
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #2
+        sta     txtcolor
+        pla
+        jsr     putchar
+        ldy     #6
+ac_w:   jsr     vbl_edge
+        dey
+        bne     ac_w
+        plx
+        dex
+        bne     ac_lp
+        jmp     session_start
+
+; menu_draw - the four items at rows 16-19, selected one coral with '>'
+menu_draw:
+        .a8
+        .i8
+        ldx     #0
+md_lp:
+        phx
+        txa
+        clc
+        adc     #20
+        pha
+        jsr     clear_rowA
+        pla
+        rep     #$20
+        .a16
+        and     #$00FF
+        sta     currow
+        lda     #30
+        sta     curcol
+        sep     #$20
+        .a8
+        plx
+        phx
+        txa
+        asl     a
+        tay
+        rep     #$20
+        .a16
+        lda     menu_ptrs,y
+        sta     strptr
+        sep     #$20
+        .a8
+        plx
+        phx
+        cpx     menusel
+        beq     md_sel
+        lda     #3              ; gray (platinum), no marker
+        sta     txtcolor
+        lda     #' '
+        jsr     putchar
+        lda     #' '
+        jsr     putchar
+        bra     md_txt
+md_sel:
+        lda     #2              ; coral with the '>' marker
+        sta     txtcolor
+        lda     #'>'
+        jsr     putchar
+        lda     #' '
+        jsr     putchar
+md_txt:
+        jsr     draw_str
+        plx
+        inx
+        cpx     #4
+        bne     md_lp
+        rts
+
+; =====================================================================
+; modem page - a live Hayes AT console. Keys go straight to the modem
+; (it echoes them back, E1), replies print in the window. Esc = menu.
+; =====================================================================
+page_modem:
+        jsr     clear_screen
+        TEXT    str_mdm_t, 34, 2, 2
+        TEXT    str_mdm_1, 4, 4, 3
+        TEXT    str_mdm_2, 4, 5, 3
+        TEXT    str_mdm_3, 4, 6, 3
+        TEXT    str_mdm_4, 24, 22, 3
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        lda     #8
+        sta     currow
+        sep     #$20
+        .a8
+mp_loop:
+        jsr     havebyte
+        beq     mp_key
+        jsr     getbyte
+        and     #$7F
+        cmp     #$0D
+        beq     mp_nl
+        cmp     #$20
+        bcc     mp_loop
+        cmp     #$7F
+        bcs     mp_loop
+        pha
+        lda     #3              ; modem traffic in platinum
+        sta     txtcolor
+        pla
+        jsr     mp_put
+        bra     mp_loop
+mp_nl:
+        jsr     mp_newline
+        bra     mp_loop
+mp_key:
+        lda     KBD
+        bpl     mp_loop
+        sta     KBDSTRB
+        and     #$7F
+        cmp     #$1B            ; Esc -> back to the menu
+        beq     mp_done
+        cmp     #$0D
+        beq     mp_send
+        cmp     #$20
+        bcc     mp_loop
+        cmp     #$7F
+        bcs     mp_loop
+        jsr     sccput
+        bra     mp_loop
+mp_send:
+        lda     #$0D
+        jsr     sccput
+        bra     mp_loop
+mp_done:
+        jmp     menu_screen
+
+; mp_put/mp_newline - echo window plumbing (rows 8-20, wraps, clears)
+mp_put:
+        .a8
+        .i8
+        pha
+        rep     #$20
+        .a16
+        lda     curcol
+        cmp     #80
+        sep     #$20
+        .a8
+        bcc     mp_ok
+        jsr     mp_newline
+mp_ok:
+        pla
+        jmp     putchar
+mp_newline:
+        .a8
+        .i8
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        lda     currow
+        inc     a
+        cmp     #21
+        bcc     mp_nl2
+        lda     #8
+mp_nl2: sta     currow
+        sep     #$20
+        .a8
+        lda     currow          ; low byte; blank the row we are entering
+        jsr     clear_rowA
+        rts
+
+; instructions page
+page_instr:
+        jsr     clear_screen
+        TEXT    str_ins_t, 33, 1, 2
+        TEXT    str_ins_1, 4, 3, 3
+        TEXT    str_ins_b0, 4, 5, 2
+        TEXT    str_ins_b1, 4, 6, 3
+        TEXT    str_ins_b2, 4, 7, 3
+        TEXT    str_ins_b3, 4, 8, 3
+        TEXT    str_ins_m0, 4, 10, 2
+        TEXT    str_ins_m1, 4, 11, 3
+        TEXT    str_ins_m2, 4, 12, 3
+        TEXT    str_ins_m3, 4, 13, 3
+        TEXT    str_ins_s0, 4, 15, 2
+        TEXT    str_ins_s1, 4, 16, 3
+        TEXT    str_ins_u1, 4, 18, 3
+        TEXT    str_ins_u2, 4, 19, 3
+        TEXT    str_anykey, 28, 22, 3
+        jsr     page_key
+        jmp     menu_screen
+page_key:
+        .a8
+        .i8
+pk_w:   jsr     rb_poll
+        lda     KBD
+        bpl     pk_w
+        sta     KBDSTRB
+        rts
+
+; quit: back to text mode and pull the reset cord (lands at BASIC)
+act_quit:
+        sep     #$30
+        .a8
+        .i8
+        lda     #$01
+        sta     NEWVIDEO        ; SHR off, classic video
+        sec
+        xce                     ; emulation mode
+        lda     $C051           ; text on
+        lda     $C054           ; page 1
+        jmp     ($03F2)         ; warm reset -> ProDOS/BASIC
+
+session_start:
+        rep     #$30            ; session palette: real gray and white
+        .a16
+        .i16
+        ldx     #0
+@sspal: lda     shr_palette,x
+        sta     f:$E19E00,x
+        inx
+        inx
+        cpx     #32
+        bne     @sspal
+        sep     #$10
+        .i8
+        sep     #$20
+        .a8
+        ; ---- session screen ----
+        jsr     clear_screen
+        rep     #$20
+        .a16
+        lda     #(SHR_BASE + 6*160 + 2)     ; mascot's home in the header
+        sta     mascot_at
+        sep     #$20
+        .a8
+        jsr     draw_mascot
+        .a8
+
+        TEXT    str_title, 12, 1, 2     ; placeholder until the bridge's header lands
+
+        ; transcript cursor starts below the header
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        lda     #START_ROW
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #$FF            ; first spinner advance -> word 0 (Cogitating)
+        sta     spinword
+        ; scrollback buffer
+        stz     b_head
+        lda     #1
+        sta     b_count         ; line 0 exists (empty)
+        stz     b_col
+        stz     b_view
+        stz     header_locked
+        lda     #BUF_BANK
+        sta     bufptr+2
+        jsr     buf_setline     ; bufptr -> line 0
+        jsr     buf_clearline
+        lda     BORDERCOL
+        and     #$F0
+        ora     #$0D            ; DEBUG breadcrumb: YELLOW border = init complete
+        sta     BORDERCOL
+
+; =====================================================================
+; main loop
+; =====================================================================
+main:
+        jsr     draw_box
+        lda     BORDERCOL
+        and     #$F0            ; DEBUG breadcrumb: black border = UI fully up
+        sta     BORDERCOL
+        jsr     read_line
+        lda     linelen
+        beq     main
+        jsr     draw_box        ; clear typed text from the input box on Enter
+        jsr     echo_user
+        jsr     send_line
+        jsr     spinner
+        jsr     recv_reply
+        bra     main
+
+; =====================================================================
+; draw_box - rules at RULE1/RULE2, "> " at INPUT_ROW, clear input line
+; =====================================================================
+draw_box:
+        .a8
+        .i8
+        lda     #RULE1_ROW
+        jsr     draw_rule
+        lda     #RULE2_ROW
+        jsr     draw_rule
+        lda     #INPUT_ROW
+        jsr     clear_rowA
+        ; draw "> " prompt (gray) at col0 INPUT_ROW, preserving transcript cursor
+        rep     #$20
+        .a16
+        lda     curcol
+        pha
+        lda     currow
+        pha
+        lda     #0
+        sta     curcol
+        lda     #INPUT_ROW
+        sta     currow
+        lda     #str_prompt
+        sta     strptr
+        sep     #$20
+        .a8
+        lda     #1
+        sta     txtcolor
+        jsr     draw_str
+        rep     #$20
+        .a16
+        pla
+        sta     currow
+        pla
+        sta     curcol
+        sep     #$20
+        .a8
+        rts
+
+; =====================================================================
+; read_line - read keys into linebuf, echo at INPUT_ROW, return on CR.
+;   preserves transcript cursor (curcol/currow).
+; =====================================================================
+read_line:
+        .a8
+        .i8
+        ; save transcript cursor
+        rep     #$20
+        .a16
+        lda     curcol
+        sta     savecol
+        lda     currow
+        sta     saverow
+        ; input cursor at col2/INPUT_ROW
+        lda     #2
+        sta     curcol
+        lda     #INPUT_ROW
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #1
+        sta     txtcolor
+        stz     linelen
+rl_key:
+        lda     KBD
+        bmi     rl_haskey       ; bit7 set -> a key is waiting
+        jsr     check_incoming  ; else pick up a header frame the bridge sent
+        bra     rl_key
+rl_haskey:
+        sta     KBDSTRB         ; clear strobe (consume this key)
+        and     #$7F
+        cmp     #$0B            ; up arrow -> scroll back
+        beq     rl_up
+        cmp     #$0A            ; down arrow -> scroll forward (toward live)
+        beq     rl_down
+        cmp     #$0D            ; CR
+        beq     rl_cr
+        cmp     #$08            ; backspace (left-arrow)
+        beq     rl_bs
+        cmp     #$7F            ; DEL key -> also backspace
+        beq     rl_bs
+        cmp     #$20            ; below space -> ignore
+        bcc     rl_key
+        cmp     #$7F
+        bcs     rl_key
+        ; printable
+        pha
+        jsr     snap_live_input ; leave scrollback if we were paged up
+        pla
+        ldx     linelen
+        cpx     #76
+        bcs     rl_key          ; full
+        sta     linebuf,x
+        inc     linelen
+        jsr     putchar         ; echo (advances curcol)
+        bra     rl_key
+rl_up:
+        lda     linelen
+        bne     rl_key          ; only page when the input line is empty
+        jsr     scroll_back
+        jsr     restore_input_cursor
+        bra     rl_key
+rl_down:
+        lda     linelen
+        bne     rl_key
+        jsr     scroll_fwd
+        jsr     restore_input_cursor
+        bra     rl_key
+rl_cr:
+        jsr     snap_live_input
+        bra     rl_done
+rl_bs:
+        lda     linelen
+        beq     rl_key
+        dec     linelen
+        ; erase: curcol--, draw space, curcol--
+        rep     #$20
+        .a16
+        dec     curcol
+        sep     #$20
+        .a8
+        lda     #' '
+        jsr     putchar
+        rep     #$20
+        .a16
+        dec     curcol
+        sep     #$20
+        .a8
+        bra     rl_key
+rl_done:
+        ; null-terminate linebuf
+        ldx     linelen
+        lda     #0
+        sta     linebuf,x
+        ; restore transcript cursor
+        rep     #$20
+        .a16
+        lda     savecol
+        sta     curcol
+        lda     saverow
+        sta     currow
+        sep     #$20
+        .a8
+        rts
+
+; =====================================================================
+; echo_user - print "> " + linebuf + newline into the transcript
+; =====================================================================
+echo_user:
+        .a8
+        .i8
+        lda     #3              ; white: user's submitted messages
+        sta     txtcolor
+        lda     #'>'
+        jsr     cout
+        lda     #' '
+        jsr     cout
+        ldx     #0
+eu_lp:  lda     linebuf,x
+        beq     eu_done
+        phx
+        jsr     cout
+        plx
+        inx
+        bne     eu_lp
+eu_done:
+        lda     #$0D
+        jsr     cout
+        lda     #$0D            ; blank line between message and reply
+        jsr     cout
+        rts
+
+; =====================================================================
+; send_line - transmit linebuf + CR over the SCC
+; =====================================================================
+send_line:
+        .a8
+        .i8
+        ldx     #0
+sl_lp:  lda     linebuf,x
+        beq     sl_cr
+        jsr     sccput
+        inx
+        bne     sl_lp
+sl_cr:  lda     #$0D
+        jsr     sccput
+        rts
+
+; =====================================================================
+; clear_screen - all SHR pixels to black. Callable from any M/X width.
+; =====================================================================
+clear_screen:
+        php
+        rep     #$30
+        .a16
+        .i16
+        lda     #$0000
+        ldx     #$0000
+cs_lp:  sta     f:$E12000,x
+        inx
+        inx
+        cpx     #$7D00
+        bne     cs_lp
+        plp
+        rts
+
+; =====================================================================
+; scc_init - program SCC channel B (modem port) for 9600 8N1, polled.
+;   A real IIgs only hardware-resets the SCC at power-on; the channel moves
+;   no bytes until clocks are set and Rx/Tx enabled (Apple IIgs TN #018).
+;   KEGS ignores most of this but accepts the writes. Interrupts must be
+;   off around the pointer/value write pairs (they are: sei at start, no cli).
+; =====================================================================
+SCC_BAUD_TC = 10        ; 3686400/(2*16*baud)-2: 10 = 9600, 4 = 19200
+scc_init:
+        .a8
+        .i8
+        lda     SCC_STAT        ; force the WR0 register pointer to a known state
+        ldx     #0
+si_lp:  lda     scc_tab,x       ; register number -> WR0
+        sta     SCC_STAT
+        inx
+        lda     scc_tab,x       ; value -> that register
+        sta     SCC_STAT
+        inx
+        cpx     #scc_tab_end-scc_tab
+        bne     si_lp
+        rts
+
+scc_tab:
+        .byte   9,  $40         ; channel B reset
+        .byte   4,  $44         ; x16 clock, 1 stop bit, no parity
+        .byte   3,  $C0         ; Rx 8 bits/char, receiver still off
+        .byte   5,  $EA         ; Tx 8 bits, Tx enable, RTS + DTR asserted
+        .byte   11, $50         ; Rx and Tx clock = baud rate generator
+        .byte   12, SCC_BAUD_TC ; BRG time constant, low byte
+        .byte   13, $00         ; BRG time constant, high byte
+        .byte   14, $01         ; BRG enable, source = RTxC (3.6864 MHz)
+        .byte   15, $00         ; no external/status interrupts
+        .byte   1,  $00         ; no Rx/Tx interrupts (polled)
+        .byte   9,  $00         ; master interrupt enable off
+        .byte   3,  $C1         ; receiver on
+scc_tab_end:
+
+; =====================================================================
+; modem_dial - unconditionally send "ATDS=0" CR (dial phone book entry 0).
+;   No connected-check: a probe can't work, because in command mode the
+;   modem ECHOES the probe byte and the echo is indistinguishable from an
+;   answer. Instead: command mode -> the modem dials; already online ->
+;   the string reaches the bridge, which recognizes ATD... lines and
+;   swallows them. CONNECT/OK chatter is ignored as stray bytes.
+; =====================================================================
+modem_dial:
+        .a8
+        .i8
+        ldx     #0
+md_snd: lda     dial_str,x
+        beq     md_cr
+        jsr     sccput          ; sccput preserves X
+        inx
+        bne     md_snd
+md_cr:  lda     #$0D
+        jsr     sccput
+        rts
+
+dial_str:
+        .byte   "ATDS=0",0
+
+spin_glyphs:
+        .byte   "*+:+"          ; pulse cycle for the thinking spinner
+
+; =====================================================================
+; splash_frame - A (a8) = frame index. Draws one frame of the clawd.gif
+;   port, tripled: each stored 2-bit pixel becomes 3 screen bytes (12px)
+;   wide and 6 scanlines tall, via the expand4_n solid-byte tables.
+;   splash_data/splash_off/splash_seq all come from assets.inc (generated
+;   from the gif itself). Uses zp srcp/srcrow. a8/i8 in and out.
+;   Invariant inside the pixel loop: B (A's hidden high byte) = 0, so TAX
+;   in 8-bit A yields a clean 16-bit table index.
+; =====================================================================
+SPLASH_XOFF = (160 - 8*SPLASH_BYTES)/2
+SPLASH_TOP  = 18
+splash_frame:
+        .a8
+        .i8
+        pha
+        rep     #$30
+        .a16
+        .i16
+        lda     #(SHR_BASE + SPLASH_TOP*160 + SPLASH_XOFF)
+        sta     destptr
+        sep     #$20
+        .a8
+        lda     #SPLASH_H
+        sta     rowcnt
+        pla                     ; frame index
+        rep     #$30
+        .a16
+        .i16
+        and     #$00FF
+        asl     a
+        tax
+        lda     splash_off,x
+        clc
+        adc     #splash_data    ; srcp -> this frame's first byte
+        sta     srcp
+        lda     #$0000          ; B := 0 for the TAX trick
+        sep     #$20
+        .a8
+sf_row:
+        rep     #$20
+        .a16
+        lda     srcp            ; remember the row start; it is drawn 3 times
+        sta     srcrow
+        lda     #$0000
+        sep     #$20
+        .a8
+        lda     #3
+        sta     rowrep
+sf_rep:
+        rep     #$20
+        .a16
+        lda     srcrow
+        sta     srcp
+        lda     #$0000
+        sep     #$20
+        .a8
+        ldy     #0
+sf_byte:
+        lda     (srcp)          ; one stored byte = 4 source pixels
+        tax                     ; (B=0 -> clean index)
+        lda     expand4_0,x     ; each pixel becomes 2 solid bytes (8 px)
+        sta     [destptr],y
+        iny
+        sta     [destptr],y
+        iny
+        lda     expand4_1,x
+        sta     [destptr],y
+        iny
+        sta     [destptr],y
+        iny
+        lda     expand4_2,x
+        sta     [destptr],y
+        iny
+        sta     [destptr],y
+        iny
+        lda     expand4_3,x
+        sta     [destptr],y
+        iny
+        sta     [destptr],y
+        iny
+        inc     srcp
+        bne     sfb_n
+        inc     srcp+1
+sfb_n:  cpy     #8*SPLASH_BYTES
+        bne     sf_byte
+        rep     #$20
+        .a16
+        lda     destptr
+        clc
+        adc     #160
+        sta     destptr
+        lda     #$0000
+        sep     #$20
+        .a8
+        dec     rowrep
+        bne     sf_rep
+        dec     rowcnt
+        bne     sf_row
+        sep     #$10
+        .i8
+        rts
+
+; sccput - send A over SCC, waiting for the Tx buffer to empty first (required
+;   on real hardware; KEGS would accept immediately). Preserves X.
+sccput:
+        pha
+scp_wait:
+        lda     SCC_STAT        ; RR0 bit2 = Tx buffer empty
+        and     #$04
+        beq     scp_wait
+        pla
+        sta     SCC_DATA
+        rts
+
+; =====================================================================
+; serial Rx ring buffer - the SCC FIFO is only 3 bytes deep, so anything
+; slow (scroll_up, clear_rowA, waiting on vblank) must keep draining the
+; port or bytes are lost. rb_poll stashes into RBUF from inside those
+; loops; every reader goes through getbyte/havebyte, buffered bytes first.
+; This is why the bridge needs no --pace-cps for this client.
+; =====================================================================
+; rb_poll - drain the SCC FIFO into RBUF. Callable from ANY M/X width;
+;   preserves X/Y, trashes A. The drain is BOUNDED (FIFO is 3 deep) and ends
+;   with a WR0 Error Reset: a real 8530 latches Rx overrun - guaranteed at
+;   boot while the modem's dial echo arrives during UI drawing - and a wedged
+;   status bit would spin an unbounded drain loop forever. KEGS models none
+;   of this, so only real hardware hangs without the bound + reset.
+rb_poll:
+        php
+        rep     #$30
+        .a16
+        .i16
+        phx
+        phy
+        sep     #$30
+        .a8
+        .i8
+        ldy     #4              ; more than the FIFO holds; hard upper bound
+rp_lp:  lda     SCC_STAT
+        and     #$01
+        beq     rp_x
+        lda     SCC_DATA
+        ldx     rb_head
+        sta     RBUF,x
+        inx                     ; 8-bit index wraps at 256 naturally
+        stx     rb_head
+        dey
+        bne     rp_lp
+rp_x:   lda     #$30            ; WR0 = Error Reset: clear latched overrun
+        sta     SCC_STAT
+        rep     #$30
+        .a16
+        .i16
+        ply
+        plx
+        plp
+        rts
+
+; getbyte - next serial byte -> A (blocking). Buffered bytes first. Preserves X.
+getbyte:
+        .a8
+        .i8
+        phx
+gb_lp:  ldx     rb_tail
+        cpx     rb_head
+        bne     gb_buf
+        jsr     rb_poll         ; sole SCC reader: bounded drain + error reset
+        bra     gb_lp
+gb_buf: lda     RBUF,x
+        inx
+        stx     rb_tail
+        plx
+        rts
+
+; havebyte - A=1/BNE if a byte is waiting, A=0/BEQ if not. Preserves X.
+havebyte:
+        .a8
+        .i8
+        phx
+        jsr     rb_poll
+        ldx     rb_tail
+        cpx     rb_head
+        beq     hb_no
+        lda     #1
+        bra     hb_x
+hb_no:  lda     #0
+hb_x:   plx
+        cmp     #0              ; plx clobbered Z; re-derive it from A
+        rts
+
+; =====================================================================
+; spinner - animate until a byte is available (min frames for visibility)
+; =====================================================================
+spinner:
+        .a8
+        .i8
+        stz     frame
+        stz     havefirst
+        stz     sp_vblsub
+        stz     sp_ones
+        stz     sp_tens
+        stz     sp_huns
+        inc     spinword        ; next word for this reply
+        lda     spinword
+        cmp     #SPIN_COUNT
+        bcc     @wc
+        stz     spinword
+@wc:
+        lda     #5              ; seconds until the word rotates
+        sta     sp_wordcd
+sp_lp:
+        jsr     havebyte
+        beq     sp_draw         ; no byte -> keep spinning
+        ; a byte is waiting: consume it, discard leading control bytes so the
+        ; spinner stays up until the reply's first real character arrives
+        jsr     getbyte
+        and     #$7F
+        cmp     #EOT
+        beq     sp_exj          ; empty reply -> stash EOT and stop
+        cmp     #CMD_COLOR      ; color/bullet/header markers are real content
+        beq     sp_exj
+        cmp     #CMD_BULLET
+        beq     sp_exj
+        cmp     #CMD_HEADER
+        beq     sp_exj
+        cmp     #$20
+        bcc     sp_lp           ; CR/LF/NUL before reply -> discard, keep spinning
+        cmp     #$7F
+        bcs     sp_lp           ; stray high byte -> discard
+sp_exj: brl     sp_exit         ; first printable char in A (sp_exit is far now)
+sp_draw:
+        lda     #2              ; coral word
+        sta     txtcolor
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        sep     #$20
+        .a8
+        ; animated star: pulse * + : + like the real TUI spinner
+        lda     frame
+        lsr     a
+        and     #$03
+        tax
+        lda     spin_glyphs,x
+        jsr     putchar
+        ; word: strptr = spin_ptrs[spinword]
+        lda     spinword
+        asl     a               ; *2 (2-byte pointers)
+        tax
+        rep     #$20
+        .a16
+        lda     spin_ptrs,x
+        sta     strptr
+        sep     #$20
+        .a8
+        jsr     draw_str        ; " Word..."
+        ; elapsed timer in gray:  (Ns)
+        lda     #1
+        sta     txtcolor
+        lda     #' '
+        jsr     putchar
+        lda     #'('
+        jsr     putchar
+        jsr     draw_secs
+        lda     #'s'
+        jsr     putchar
+        lda     #')'
+        jsr     putchar
+        ; pad to col 30 with spaces to erase a longer previous render
+sp_pad:
+        rep     #$20
+        .a16
+        lda     curcol
+        cmp     #30
+        sep     #$20
+        .a8
+        bcs     sp_paced
+        lda     #' '
+        jsr     putchar
+        bra     sp_pad
+sp_paced:
+        jsr     spin_pace       ; ~100ms real-time; advances the timer
+        inc     frame
+        brl     sp_lp           ; long branch: sp_lp is >127 bytes back
+sp_exit:
+        sta     firstbyte       ; A = first real byte (or EOT)
+        lda     #1
+        sta     havefirst
+        rep     #$20
+        .a16
+        lda     currow
+        sep     #$20
+        .a8
+        jsr     clear_rowA      ; wipe " COGITATING..." line
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        sep     #$20
+        .a8
+        rts
+
+; =====================================================================
+; spin_pace - ~100ms of real-time pacing (6 vblanks) while advancing the
+;   elapsed-second counters; bails early if a reply byte is ready.
+; =====================================================================
+spin_pace:
+        .a8
+        .i8
+        ldx     #6
+sp_pc:
+        jsr     havebyte
+        bne     sp_pc_x         ; byte ready -> stop pacing, sp_lp handles it
+        jsr     vbl_edge        ; one vblank (~1/60s)
+        inc     sp_vblsub
+        lda     sp_vblsub
+        cmp     #60
+        bcc     sp_pc_n
+        stz     sp_vblsub
+        jsr     tick_second
+sp_pc_n:
+        dex
+        bne     sp_pc
+sp_pc_x:
+        rts
+
+; tick_second - one elapsed second: bump the decimal digit counters and, every
+;   sp_wordcd seconds, rotate to the next thinking word.
+tick_second:
+        .a8
+        .i8
+        inc     sp_ones
+        lda     sp_ones
+        cmp     #10
+        bcc     ts_word
+        stz     sp_ones
+        inc     sp_tens
+        lda     sp_tens
+        cmp     #10
+        bcc     ts_word
+        stz     sp_tens
+        inc     sp_huns
+ts_word:
+        dec     sp_wordcd
+        bne     ts_done
+        inc     spinword
+        lda     spinword
+        cmp     #SPIN_COUNT
+        bcc     ts_cd
+        stz     spinword
+ts_cd:
+        lda     #5
+        sta     sp_wordcd
+ts_done:
+        rts
+
+; draw_secs - print the elapsed seconds (sp_huns/tens/ones) with no leading zeros
+draw_secs:
+        .a8
+        .i8
+        lda     sp_huns
+        beq     ds_tens
+        clc
+        adc     #'0'
+        jsr     putchar
+        lda     sp_tens         ; huns shown -> always show tens
+        clc
+        adc     #'0'
+        jsr     putchar
+        bra     ds_ones
+ds_tens:
+        lda     sp_tens
+        beq     ds_ones
+        clc
+        adc     #'0'
+        jsr     putchar
+ds_ones:
+        lda     sp_ones
+        clc
+        adc     #'0'
+        jsr     putchar
+        rts
+
+; vbl_edge - wait for one 0->1 transition of RDVBL bit7 (~1/60s, real time).
+;   Each phase is bounded (~50ms) so a non-toggling emulator degrades to a fast
+;   timer instead of a frozen client. Preserves X (spin_pace's loop counter).
+vbl_edge:
+        .a8
+        .i8
+        phx
+        rep     #$10
+        .i16
+        ldx     #$8000
+ve1:    jsr     rb_poll         ; stay deaf to the port for no more than one pass
+        lda     RDVBL
+        bpl     ve1b            ; bit7 = 0 -> proceed to wait for the rising edge
+        dex
+        bne     ve1
+        bra     ve_x            ; timed out
+ve1b:
+        ldx     #$8000
+ve2:    jsr     rb_poll
+        lda     RDVBL
+        bmi     ve_x            ; bit7 = 1 -> 0->1 edge seen
+        dex
+        bne     ve2
+ve_x:
+        sep     #$10
+        .i8
+        plx
+        rts
+
+; =====================================================================
+; recv_reply - read bytes until EOT, cout each (skip LF)
+; =====================================================================
+recv_reply:
+        .a8
+        .i8
+        lda     #1              ; replies default to gray
+        sta     txtcolor
+        stz     colorpend
+        lda     havefirst       ; spinner already pulled the first real byte
+        beq     rr_next
+        lda     firstbyte
+        bra     rr_disp
+rr_next:
+        jsr     getbyte
+        and     #$7F
+rr_disp:
+        ldx     colorpend       ; awaiting a color value byte?
+        beq     rr_nocp
+        sta     txtcolor
+        stz     colorpend
+        bra     rr_next
+rr_nocp:
+        cmp     #EOT
+        beq     rr_done
+        cmp     #CMD_COLOR      ; 0x01 -> next byte is a color
+        beq     rr_setcp
+        cmp     #CMD_BULLET     ; 0x02 -> draw white reply bullet
+        beq     rr_bullet
+        cmp     #CMD_HEADER     ; 0x0E -> header frame (title CR subtitle CR)
+        beq     rr_header
+        cmp     #$0A            ; skip LF
+        beq     rr_next
+        jsr     cout
+        bra     rr_next
+rr_setcp:
+        lda     #1
+        sta     colorpend
+        bra     rr_next
+rr_bullet:
+        jsr     draw_bullet
+        bra     rr_next
+rr_header:
+        jsr     do_header
+        bra     rr_next
+rr_done:
+        lda     #$0D
+        jsr     cout
+        lda     #$0D            ; blank line before the next message
+        jsr     cout
+        rts
+
+; =====================================================================
+; do_header - a CMD_HEADER frame arrived: two CR-terminated lines (real title
+;   then subtitle). Draw them once at the fixed header slot (rows 1-3, col 12);
+;   on later frames just consume the bytes. Preserves the transcript cursor.
+; =====================================================================
+do_header:
+        .a8
+        .i8
+        lda     header_locked
+        beq     dh_draw
+        jsr     hdr_skipline    ; header frozen (scrolled off) -> discard the frame
+        jsr     hdr_skipline
+        jsr     hdr_skipline
+        rts
+dh_draw:
+        rep     #$20            ; save cursor (transcript or input)
+        .a16
+        lda     curcol
+        sta     hsavecol
+        lda     currow
+        sta     hsaverow
+        lda     #12             ; title at row 1, col 12
+        sta     curcol
+        lda     #1
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #2              ; coral
+        sta     txtcolor
+        jsr     hdr_readline
+        rep     #$20            ; subtitle at row 2
+        .a16
+        lda     #12
+        sta     curcol
+        lda     #2
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #1              ; gray
+        sta     txtcolor
+        jsr     hdr_readline
+        rep     #$20            ; working directory at row 3
+        .a16
+        lda     #12
+        sta     curcol
+        lda     #3
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #1              ; gray
+        sta     txtcolor
+        jsr     hdr_readline
+        rep     #$20            ; restore cursor
+        .a16
+        lda     hsavecol
+        sta     curcol
+        lda     hsaverow
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #1
+        sta     txtcolor
+        rts
+
+; hdr_readline - draw printable bytes from the SCC until CR, then pad to col 40
+;   with spaces so a shorter update overwrites the previous header text.
+hdr_readline:
+        .a8
+        .i8
+hrl_lp:
+        jsr     getbyte
+        and     #$7F
+        cmp     #$0D
+        beq     hrl_pad
+        cmp     #$20
+        bcc     hrl_lp
+        cmp     #$7F
+        bcs     hrl_lp
+        jsr     putchar
+        bra     hrl_lp
+hrl_pad:
+        rep     #$20
+        .a16
+        lda     curcol
+        cmp     #56
+        sep     #$20
+        .a8
+        bcs     hrl_x
+        lda     #' '
+        jsr     putchar
+        bra     hrl_pad
+hrl_x:
+        rts
+
+; hdr_skipline - read and discard SCC bytes until CR
+hdr_skipline:
+        .a8
+        .i8
+hsk_lp:
+        jsr     getbyte
+        and     #$7F
+        cmp     #$0D
+        bne     hsk_lp
+        rts
+
+; =====================================================================
+; blink_tick - idle mascot blink, driven from the read_line key loop.
+;   Counts VBL rising edges; at ~4s the eyes close, ~130ms later they
+;   reopen and the cycle restarts. Skipped once the header (and mascot)
+;   have scrolled off the transcript.
+; =====================================================================
+blink_tick:
+        .a8
+        .i8
+        lda     header_locked
+        bne     bt_x
+        lda     RDVBL
+        and     #$80
+        cmp     blk_prev
+        beq     bt_x            ; no VBL transition since last look
+        sta     blk_prev
+        cmp     #$80
+        bne     bt_x            ; count rising edges only -> 60 Hz ticks
+        inc     blk_cnt
+        lda     blk_cnt
+        cmp     #240            ; ~4 s of idle: eyes shut
+        bne     bt_open
+        lda     #1
+        jmp     mascot_frame
+bt_open:
+        cmp     #248            ; ~130 ms later: eyes open, restart cycle
+        bne     bt_x
+        stz     blk_cnt
+        lda     #0
+        jmp     mascot_frame
+bt_x:
+        rts
+
+; check_incoming - non-blocking: draw a header frame the bridge sent while idle
+;   (so the real header appears at boot). Ignores any other stray byte.
+check_incoming:
+        .a8
+        .i8
+        jsr     havebyte
+        beq     ci_x
+        jsr     getbyte
+        and     #$7F
+        cmp     #CMD_HEADER
+        bne     ci_x
+        jsr     do_header
+ci_x:
+        rts
+
+; =====================================================================
+; cout - print A with cursor handling; CR = newline+scroll
+; =====================================================================
+cout:
+        .a8
+        .i8
+        cmp     #$0D
+        beq     co_nl
+        cmp     #$20
+        bcc     co_ret          ; control char -> ignore
+        cmp     #$7F
+        bcs     co_ret          ; >=127 -> ignore
+        pha
+        jsr     putchar         ; advances curcol
+        pla
+        jsr     rec_cell        ; record into the scrollback buffer
+        rep     #$20
+        .a16
+        lda     curcol
+        cmp     #80
+        sep     #$20
+        .a8
+        bcc     co_ret          ; still room
+        ; wrap
+co_nl:
+        jsr     buf_newline     ; advance the scrollback ring to a new line
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        inc     currow
+        lda     currow
+        cmp     #(BOT_ROW+1)
+        sep     #$20
+        .a8
+        bcc     co_ret
+        ; past bottom -> scroll, currow = BOT_ROW
+        jsr     scroll_up
+        rep     #$20
+        .a16
+        lda     #BOT_ROW
+        sta     currow
+        sep     #$20
+        .a8
+co_ret:
+        rts
+
+; =====================================================================
+; scroll_up - move transcript region up one text row, clear bottom
+; =====================================================================
+scroll_up:
+        .a8
+        .i8
+        lda     #1              ; header has now scrolled off -> freeze it
+        sta     header_locked
+        ; copy rows TOP_ROW+1..BOT_ROW up one row, in bank $E1, as 16-bit words.
+        ; (mvn block-move corrupted KEGS' emulated state; a plain [dp],y copy is
+        ;  the same mechanism putchar/clear_rowA already use safely.)
+        lda     #$E1
+        sta     srcptr+2
+        sta     destptr+2
+        rep     #$30
+        .a16
+        .i16
+        lda     #((TOP_ROW+1)*1280 + SHR_BASE)
+        sta     srcptr
+        lda     #(TOP_ROW*1280 + SHR_BASE)
+        sta     destptr
+        ldy     #0
+scu_lp:
+        tya                     ; drain the port every 256 bytes moved
+        and     #$00FF
+        bne     scu_cp
+        jsr     rb_poll
+scu_cp:
+        lda     [srcptr],y
+        sta     [destptr],y
+        iny
+        iny
+        cpy     #((BOT_ROW-TOP_ROW)*1280)
+        bne     scu_lp
+        sep     #$20
+        .a8
+        sep     #$10
+        .i8
+        lda     #BOT_ROW
+        jsr     clear_rowA
+        rts
+
+; =====================================================================
+; clear_rowA - clear 8 scanlines (1280 bytes) of text row A to black
+; =====================================================================
+clear_rowA:
+        .a8
+        .i8
+        ; destptr = SHR_BASE + row*1280  ((row*5)<<8)
+        rep     #$20
+        .a16
+        and     #$00FF
+        sta     tmp2
+        asl     a
+        asl     a
+        clc
+        adc     tmp2            ; row*5
+        xba                     ; *256 -> row*1280
+        clc
+        adc     #SHR_BASE
+        sta     destptr
+        sep     #$20
+        .a8
+        rep     #$10
+        .i16
+        ldy     #0
+cra_lp:
+        tya                     ; low byte of Y; drain the port every 256 bytes
+        bne     cra_st
+        jsr     rb_poll
+cra_st: lda     #0
+        sta     [destptr],y
+        iny
+        cpy     #1280
+        bne     cra_lp
+        sep     #$10
+        .i8
+        rts
+
+; =====================================================================
+; draw_mascot
+; =====================================================================
+; entry draw_mascot: frame 0, callable from any A width (boot calls in a16).
+; entry mascot_frame: A (a8) = frame 0-2. Both exit .a8/.i8.
+draw_mascot:
+        sep     #$20
+        .a8
+        lda     #0
+mascot_frame:
+        .a8
+        pha
+        rep     #$30
+        .a16
+        .i16
+        lda     mascot_at       ; header slot normally; the splash centers it
+        sta     destptr
+        sep     #$20
+        .a8
+        lda     #MASCOT_H
+        sta     rowcnt
+        rep     #$10
+        .i16
+        pla                     ; frame index -> X = data offset within mascot_data
+        ldx     #0
+        cmp     #1
+        bcc     mf_go           ; 0 -> offset 0
+        bne     mf_2
+        ldx     #MASCOT_FSIZE   ; 1 -> one frame in
+        bra     mf_go
+mf_2:   ldx     #MASCOT_FSIZE*2 ; 2 -> two frames in
+mf_go:
+dm_row:
+        ldy     #$0000
+dm_byte:
+        lda     mascot_data,x
+        sta     [destptr],y
+        inx
+        iny
+        cpy     #MASCOT_BYTES
+        bne     dm_byte
+        rep     #$20
+        .a16
+        lda     destptr
+        clc
+        adc     #160
+        sta     destptr
+        sep     #$20
+        .a8
+        dec     rowcnt
+        bne     dm_row
+        sep     #$10
+        .i8
+        rts
+
+; =====================================================================
+; draw_str - draw null string at curcol/currow in txtcolor
+; =====================================================================
+draw_str:
+        .a8
+        .i8
+        ldy     #0
+ds_loop:
+        lda     (strptr),y
+        beq     ds_done
+        phy
+        jsr     putchar
+        ply
+        iny
+        bne     ds_loop
+ds_done:
+        rts
+
+; =====================================================================
+; putchar - draw glyph A at curcol/currow, advance curcol
+; =====================================================================
+putchar:
+        .a8
+        .i8
+        rep     #$20
+        .a16
+        and     #$00FF
+        sec
+        sbc     #FONT_FIRST
+        asl     a
+        asl     a
+        asl     a
+        clc
+        adc     #font_data
+        sta     glyphptr
+put_common:                     ; entry with glyphptr preset, still .a16
+        lda     currow
+        asl     a
+        asl     a
+        clc
+        adc     currow          ; row*5
+        xba                     ; *256
+        sta     tmp
+        lda     curcol
+        asl     a
+        clc
+        adc     tmp
+        clc
+        adc     #SHR_BASE
+        sta     destptr
+        sep     #$20
+        .a8
+        lda     txtcolor
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        sta     coloff
+        ldx     #8
+pc_row:
+        ldy     #0
+        lda     (glyphptr),y
+        pha
+        lsr     a
+        lsr     a
+        lsr     a
+        lsr     a
+        clc
+        adc     coloff
+        tay
+        lda     expand_tbl,y
+        ldy     #0
+        sta     [destptr],y
+        pla
+        and     #$0F
+        clc
+        adc     coloff
+        tay
+        lda     expand_tbl,y
+        ldy     #1
+        sta     [destptr],y
+        rep     #$20
+        .a16
+        inc     glyphptr
+        lda     destptr
+        clc
+        adc     #160
+        sta     destptr
+        sep     #$20
+        .a8
+        dex
+        bne     pc_row
+        inc     curcol
+        rts
+
+; =====================================================================
+; draw_bullet - draw the white reply bullet at curcol/currow (advances curcol),
+;   then restore gray so the reply body stays gray.
+; =====================================================================
+draw_bullet:
+        .a8
+        .i8
+        lda     #3              ; white
+        sta     txtcolor
+        rep     #$20
+        .a16
+        lda     #bullet_data
+        sta     glyphptr
+        jsr     put_common      ; draw + advance curcol (returns in .a8)
+        .a8                     ; put_common left the accumulator 8-bit
+        lda     #CELL_BULLET    ; record bullet cell (color still white)
+        jsr     rec_cell
+        lda     #1              ; restore gray for the reply body
+        sta     txtcolor
+        rts
+
+; =====================================================================
+; scrollback buffer helpers (ring of lines in bank BUF_BANK)
+; =====================================================================
+; bufptr(low) = b_head * BUF_STRIDE
+buf_setline:
+        .a8
+        .i8
+        lda     b_head
+; A = line index -> bufptr(low) = A * 160
+buf_setline_a:
+        .a8
+        .i8
+        rep     #$20
+        .a16
+        and     #$00FF
+        sta     tmp
+        asl     a
+        asl     a               ; *4
+        clc
+        adc     tmp             ; *5
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        asl     a               ; *32 -> *160
+        sta     bufptr
+        sep     #$20
+        .a8
+        rts
+
+; fill the line at bufptr with (space, gray) cells
+buf_clearline:
+        .a8
+        .i8
+        ldy     #0
+bcl_lp:
+        lda     #$20
+        sta     [bufptr],y
+        iny
+        lda     #1
+        sta     [bufptr],y
+        iny
+        cpy     #BUF_STRIDE
+        bne     bcl_lp
+        rts
+
+; rec_cell - store char A (+txtcolor) at the current line, column b_col; advance
+rec_cell:
+        .a8
+        .i8
+        pha
+        lda     b_col
+        cmp     #80
+        bcs     rc_full
+        asl     a               ; b_col * 2
+        tay
+        pla
+        sta     [bufptr],y      ; char
+        iny
+        lda     txtcolor
+        sta     [bufptr],y      ; color
+        inc     b_col
+        rts
+rc_full:
+        pla
+        rts
+
+; buf_newline - commit the current line, advance the ring to a fresh blank line
+buf_newline:
+        .a8
+        .i8
+        lda     b_col           ; finalize this line's content length
+        ldx     b_head
+        sta     b_len,x
+        inc     b_head
+        lda     b_head
+        cmp     #BUF_LINES
+        bcc     bn_1
+        stz     b_head
+bn_1:
+        lda     b_count
+        cmp     #BUF_LINES
+        bcs     bn_2
+        inc     b_count
+bn_2:
+        stz     b_col
+        jsr     buf_setline
+        jsr     buf_clearline
+        rts
+
+; =====================================================================
+; draw_view - redraw rows 0..BOT_ROW from the ring at scrollback offset b_view.
+;   Row R shows the line (BOT_ROW - R + b_view) back from the head. Only used
+;   once the screen has scrolled (b_count > 21), so the live layout is always
+;   bottom-anchored and matches this mapping.
+; =====================================================================
+draw_view:
+        .a8
+        .i8
+        stz     dv_r
+dv_row:
+        lda     #BOT_ROW        ; delta = BOT_ROW - dv_r + b_view
+        sec
+        sbc     dv_r
+        clc
+        adc     b_view
+        cmp     b_count
+        bcc     dv_draw         ; delta < b_count -> a recorded line exists
+        lda     dv_r            ; before the oldest line -> blank row
+        jsr     clear_rowA
+        bra     dv_next
+dv_draw:
+        sta     vdelta
+        lda     b_head
+        sec
+        sbc     vdelta
+        bcs     dv_nw
+        clc
+        adc     #BUF_LINES      ; wrap into the ring
+dv_nw:
+        sta     vln
+        jsr     draw_buf_line
+dv_next:
+        inc     dv_r
+        lda     dv_r
+        cmp     #(BOT_ROW+1)
+        bne     dv_row
+        rts
+
+; draw_buf_line - draw buffer line `vln` into screen row `dv_r`. Draws only the
+;   recorded content cells, then fast-clears the rest of the row.
+draw_buf_line:
+        .a8
+        .i8
+        rep     #$20
+        .a16
+        lda     #0
+        sta     curcol
+        lda     dv_r
+        and     #$00FF
+        sta     currow
+        sep     #$20
+        .a8
+        ; content length: the live head line uses b_col, others use b_len[]
+        lda     vln
+        cmp     b_head
+        bne     @stored
+        lda     b_col
+        bra     @havelen
+@stored:
+        ldx     vln
+        lda     b_len,x
+@havelen:
+        sta     dvlen
+        lda     vln
+        jsr     buf_setline_a
+        ldx     #0
+dbl_lp:
+        cpx     dvlen
+        bcs     dbl_done
+        txa
+        asl     a               ; cell*2
+        tay
+        lda     [bufptr],y      ; char
+        pha
+        iny
+        lda     [bufptr],y      ; color
+        sta     txtcolor
+        pla
+        phx
+        jsr     draw_cell
+        plx
+        inx
+        bra     dbl_lp
+dbl_done:
+        jsr     clear_row_tail  ; blank the remaining cells fast
+        rts
+
+; clear_row_tail - zero the SHR bytes for cells curcol..79 of row currow
+clear_row_tail:
+        .a8
+        .i8
+        rep     #$20
+        .a16
+        lda     currow
+        and     #$00FF
+        sta     tmp2
+        asl     a
+        asl     a
+        clc
+        adc     tmp2            ; row*5
+        xba                     ; *256 -> row*1280
+        clc
+        adc     #SHR_BASE
+        sta     destptr
+        lda     curcol
+        asl     a               ; start byte = curcol*2
+        sta     tmp2
+        sep     #$20
+        .a8
+        lda     #8
+        sta     rowcnt
+crt_sl:
+        rep     #$30
+        .a16
+        .i16
+        ldy     tmp2
+        lda     #0
+crt_by:
+        cpy     #160
+        bcs     crt_slend
+        sta     [destptr],y
+        iny
+        iny
+        bra     crt_by
+crt_slend:
+        clc
+        lda     destptr
+        adc     #160
+        sta     destptr
+        sep     #$30
+        .a8
+        .i8
+        dec     rowcnt
+        bne     crt_sl
+        rts
+
+; draw_cell - draw stored char A at curcol/currow (bullet glyph if CELL_BULLET)
+draw_cell:
+        .a8
+        .i8
+        cmp     #CELL_BULLET
+        beq     dc_bullet
+        jmp     putchar
+dc_bullet:
+        rep     #$20
+        .a16
+        lda     #bullet_data
+        sta     glyphptr
+        jmp     put_common
+
+; scroll_back / scroll_fwd / live_if_scrolled - move the scrollback view
+scroll_back:
+        .a8
+        .i8
+        lda     b_count
+        cmp     #(BOT_ROW+2)    ; <= 21 lines -> nothing scrolled off yet
+        bcc     sb_x
+        sec
+        sbc     #(BOT_ROW+1)    ; maxview = b_count - 21
+        sta     tmp2            ; maxview
+        lda     b_view
+        clc
+        adc     #SCROLL_STEP    ; new view = view + step, clamped to maxview
+        cmp     tmp2
+        bcc     sb_set
+        lda     tmp2
+sb_set:
+        cmp     b_view
+        beq     sb_x            ; already at the top
+        sta     b_view
+        jsr     draw_view
+sb_x:
+        rts
+
+scroll_fwd:
+        .a8
+        .i8
+        lda     b_view
+        beq     sf_x            ; already live
+        sec
+        sbc     #SCROLL_STEP    ; new view = view - step, clamped to 0
+        bcs     sf_set
+        lda     #0
+sf_set:
+        sta     b_view
+        jsr     draw_view
+sf_x:
+        rts
+
+live_if_scrolled:
+        .a8
+        .i8
+        lda     b_view
+        beq     lis_x
+        stz     b_view
+        jsr     draw_view
+lis_x:
+        rts
+
+; restore_input_cursor - put the cursor back in the input box (col 2, empty line)
+;   and reset the color (draw_view left txtcolor at the last cell's color).
+restore_input_cursor:
+        .a8
+        .i8
+        rep     #$20
+        .a16
+        lda     #2
+        sta     curcol
+        lda     #INPUT_ROW
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #1              ; input echoes in gray
+        sta     txtcolor
+        rts
+
+; snap_live_input - if scrolled back, jump to live and reset the input cursor
+snap_live_input:
+        .a8
+        .i8
+        lda     b_view
+        beq     sli_x
+        jsr     live_if_scrolled
+        jsr     restore_input_cursor
+sli_x:
+        rts
+
+; =====================================================================
+; draw_rule - draw a gray horizontal line across text row A
+; =====================================================================
+draw_rule:
+        .a8
+        .i8
+        ; scanline = row*8 + 4 ; destptr = SHR_BASE + scanline*160 ((s*5)<<5)
+        rep     #$20
+        .a16
+        and     #$00FF
+        asl     a
+        asl     a
+        asl     a               ; row*8
+        clc
+        adc     #4              ; scanline
+        sta     tmp2
+        asl     a
+        asl     a
+        clc
+        adc     tmp2            ; s*5
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        asl     a               ; *32 -> s*160
+        clc
+        adc     #SHR_BASE
+        sta     destptr
+        sep     #$20
+        .a8
+        ldy     #0
+        lda     #$55            ; four gray pixels
+dr_lp:
+        sta     [destptr],y
+        iny
+        cpy     #160
+        bne     dr_lp
+        rts
+
+; =====================================================================
+; delay - crude busy wait (spinner pacing)
+; =====================================================================
+delay:
+        .a8
+        .i8
+        phx
+        phy
+        ldx     #$00
+dl1:    ldy     #$00
+dl2:    iny
+        bne     dl2
+        inx
+        cpx     #$60
+        bne     dl1
+        ply
+        plx
+        rts
+
+; =====================================================================
+; strings
+; =====================================================================
+str_title:  .byte "Claude Code",0         ; placeholder until the real header lands
+str_conn:   .byte "connecting...",0       ; splash status line
+str_welcome:.byte "Welcome to Claude Code ][",0
+str_ver:    .byte "v0.1.0",0
+str_by:     .byte "by Wells Workshop",0
+str_dial:   .byte "Dialing...",0
+dial_glyphs:.byte "*+:-"                    ; connect spinner cycle
+menu_ptrs:  .word mi0, mi1, mi2, mi3
+mi0:        .byte "1. Connect",0
+mi1:        .byte "2. Modem",0
+mi2:        .byte "3. Instructions",0
+mi3:        .byte "4. Quit to Basic",0
+str_mdm_t:  .byte "MODEM CONSOLE",0
+str_mdm_1:  .byte "Type Hayes AT commands; Return sends them, Esc returns to the menu.",0
+str_mdm_2:  .byte "Point entry 0 at your bridge and save:  AT&Z0=BRIDGE.IP:6400  then  AT&W",0
+str_mdm_3:  .byte "Connect on the menu dials  ATDS=0.  Test with  AT  (expect OK).",0
+str_mdm_4:  .byte "Esc returns to the menu",0
+str_ins_t:  .byte "CLAUDE CODE ][",0
+str_ins_1:  .byte "Talk to Claude Code from a real Apple II, over a WiFi modem.",0
+str_ins_b0: .byte "THE BRIDGE (runs on a modern computer):",0
+str_ins_b1: .byte "  download: github.com/wells (see the repo for this project)",0
+str_ins_b2: .byte "  run:  python3 bridge.py --telnet --app --backend code",0
+str_ins_b3: .byte "  it listens for your modem on TCP port 6400.",0
+str_ins_m0: .byte "THE MODEM (any Hayes-compatible, e.g. WiModem232):",0
+str_ins_m1: .byte "  join it to your WiFi, then store the bridge address:",0
+str_ins_m2: .byte "    AT&Z0=BRIDGE.IP:6400   AT&W     (use the Modem console)",0
+str_ins_m3: .byte "  after that, Connect dials it automatically.",0
+str_ins_s0: .byte "SERIAL:",0
+str_ins_s1: .byte "  IIgs modem port, 9600 8N1 - this client sets that up itself.",0
+str_ins_u1: .byte "In the session: /new /mode /help /quit. Arrows scroll. Ctrl-Reset quits.",0
+str_ins_u2: .byte "Wells Workshop",0
+str_anykey: .byte "press any key to return",0
+str_model:  .byte "",0
+str_link:   .byte "Apple II <-> Claude Code",0
+str_prompt: .byte "> ",0
+
+linebuf:    .res 128
+sp_vblsub:  .res 1          ; vblanks counted within the current second
+sp_wordcd:  .res 1          ; seconds until the thinking word rotates
+sp_ones:    .res 1          ; elapsed-seconds decimal digits
+sp_tens:    .res 1
+sp_huns:    .res 1
+b_head:     .res 1          ; ring index of the current (being-written) line
+b_count:    .res 1          ; number of lines recorded (1..BUF_LINES)
+b_col:      .res 1          ; column within the current line (0..79)
+b_view:     .res 1          ; scrollback offset (0 = live)
+header_locked: .res 1       ; nonzero once the header has scrolled off (freeze it)
+rb_head:    .res 1          ; serial Rx ring buffer write index
+rb_tail:    .res 1          ; serial Rx ring buffer read index
+blk_prev:   .res 1          ; last seen VBL bit (edge detector for the blink)
+blk_cnt:    .res 1          ; VBL frames since the blink cycle started
+mascot_at:  .res 2          ; screen address the mascot draws at (splash centers it)
+rowrep:     .res 1          ; splash draw: scanline repeat counter per stored row
+menusel:    .res 1          ; boot menu: selected item 0-3
+anim_ix:    .res 1          ; menu backdrop: splash_seq cursor
+anim_cd:    .res 1          ; menu backdrop: vblanks left on current frame
+hsavecol:   .res 2          ; do_header: saved cursor
+hsaverow:   .res 2
+dv_r:       .res 1          ; draw_view: current screen row
+vdelta:     .res 1          ; draw_view: lines back from head
+vln:        .res 1          ; draw_view: buffer line being drawn
+dvlen:      .res 1          ; draw_buf_line: content length of the line
+b_len:      .res BUF_LINES  ; recorded content length of each ring line
+
+.include "assets.inc"

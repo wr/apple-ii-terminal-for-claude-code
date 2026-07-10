@@ -1,0 +1,70 @@
+CLAUDE ][ - Claude Code-style client for the Apple IIgs (40 columns).
+
+Layout, like Claude Code: a scrolling transcript up top, a pinned input box at
+the bottom (dashed rule, "> " prompt, dashed rule). Type in the box; Return
+sends your line up into the transcript, a star spinner runs, the reply streams
+in below it.
+
+The Apple II text window (POKE 34=WNDTOP, 35=WNDBTM) confines scrolling to the
+top lines so the box stays put. 40 columns - no PR#3 (PR#3 -> 80col didn't take
+under this setup, and 40col is reliable + retro).
+
+Run the bridge in --app mode at 40 columns:
+  .venv/bin/python bridge.py --connect 127.0.0.1:6502 --backend code \
+     --cols 40 --workdir /tmp/claude-ii \
+     --claude-bin /Users/wells/.local/bin/claude --app
+
+In KEGS: Ctrl-C, Edit > Paste this block (has NEW and RUN).
+
+Gotcha learned the hard way: this Applesoft throws ILLEGAL QUANTITY on
+LEFT$(x$,0) - so dots come from a DA$() table and backspace special-cases the
+last character.
+
+Knobs: line 30 POKE 49186,144 = amber on black (150 = amber on blue, 240 =
+white on black). Prompt ">" (line 810), rules "-" (line 40).
+
+NEW
+10 SB=49208:DB=49210:ET=4
+20 WD$(0)="COGITATING":WD$(1)="CLAUDING":WD$(2)="COOKING":WD$(3)="PERCOLATING":WD$(4)="MUSING":WD$(5)="NOODLING":WD$(6)="CONJURING":WD$(7)="PONDERING"
+25 DA$(0)="   ":DA$(1)=".  ":DA$(2)=".. ":DA$(3)="..."
+30 POKE 49186,144
+40 BR$="":FOR I=1 TO 38:BR$=BR$+"-":NEXT
+50 POKE 34,0:POKE 35,24:HOME
+60 VTAB 22:HTAB 1:PRINT BR$;:VTAB 24:HTAB 1:PRINT BR$;
+70 GOSUB 800
+80 POKE 35,21:VTAB 21
+90 REM === MAIN LOOP ===
+100 GOSUB 300
+110 IF L$="" THEN 100
+120 VTAB 21:HTAB 1:PRINT "> ";L$
+130 FOR I=1 TO LEN(L$):POKE DB,ASC(MID$(L$,I,1)):NEXT:POKE DB,13
+140 GOSUB 400
+150 GOSUB 500
+160 PRINT:GOTO 100
+300 REM --- INPUT IN THE BOX ---
+310 POKE 35,24:L$="":GOSUB 800
+320 GET A$:C=ASC(A$)
+330 IF C=13 THEN GOSUB 800:POKE 35,21:VTAB 21:RETURN
+340 IF C=8 OR C=127 THEN GOSUB 380:GOTO 320
+350 IF C>=32 AND LEN(L$)<36 THEN L$=L$+A$:PRINT A$;
+360 GOTO 320
+380 IF LEN(L$)=0 THEN RETURN
+385 IF LEN(L$)=1 THEN L$="":PRINT CHR$(8);" ";CHR$(8);:RETURN
+390 L$=LEFT$(L$,LEN(L$)-1):PRINT CHR$(8);" ";CHR$(8);:RETURN
+400 REM --- STAR SPINNER UNTIL REPLY ---
+410 FR=0
+420 S=PEEK(SB):IF INT(S/2)*2<>S THEN 470
+430 ST$="*":IF FR-INT(FR/2)*2=1 THEN ST$="+"
+440 WX=INT(FR/6):WX=WX-INT(WX/8)*8:DT=FR-INT(FR/4)*4
+450 F$=ST$+" "+WD$(WX)+DA$(DT)+"    "
+460 PRINT F$;:FOR J=1 TO LEN(F$):PRINT CHR$(8);:NEXT:FOR D=1 TO 60:NEXT:FR=FR+1:GOTO 420
+470 FOR J=1 TO 22:PRINT " ";:NEXT:FOR J=1 TO 22:PRINT CHR$(8);:NEXT:RETURN
+500 REM --- REPLY UNTIL EOT ---
+510 S=PEEK(SB):IF INT(S/2)*2=S THEN 510
+520 C=PEEK(DB):C=C-INT(C/128)*128
+530 IF C=ET THEN RETURN
+540 IF C<>10 THEN PRINT CHR$(C);
+550 GOTO 510
+800 REM --- DRAW EMPTY INPUT PROMPT (LINE 23) ---
+810 VTAB 23:HTAB 1:PRINT "> ";:FOR I=1 TO 36:PRINT " ";:NEXT:VTAB 23:HTAB 3:RETURN
+RUN

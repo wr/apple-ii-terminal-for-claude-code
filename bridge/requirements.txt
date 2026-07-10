@@ -1,0 +1,2 @@
+anthropic>=0.40      # chat backend (Messages API)
+pyserial>=3.5        # serial transport
