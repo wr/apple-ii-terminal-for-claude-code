@@ -592,7 +592,7 @@ def _wave():
 # Wells' bar spec: hit on 1, swung 2-e-&-a run, swung 3-&, beat 4 empty.
 # Swing = triplet-feel durations (1/3 + 1/6 beat pairs, the & at 2/3).
 # Played ONCE per menu visit, not looped.
-MUS_BPM = 144
+MUS_BPM = 152
 # the dooo-doot pair: dooo on 3, doot on the downbeat of 4. (The & of 3
 # read too tight, the swung & of 4 too long - Wells, one round each.)
 MUS_MEL = [("G4",.5),("R",.5),
