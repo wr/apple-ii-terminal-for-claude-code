@@ -159,9 +159,11 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
             continue
         if user.startswith("/"):
             keep = handle_command(user, term, args, backend, mode)
-            term.write(EOT)
             if keep is False:
+                term.write(b"\x03")  # CMD_QUIT: the client returns to its menu
+                term.write(EOT)
                 return
+            term.write(EOT)
             if isinstance(keep, tuple):
                 backend, mode = keep
             continue

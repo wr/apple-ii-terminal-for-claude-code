@@ -59,6 +59,7 @@ RBUF       = $1E00     ; 256-byte serial Rx ring buffer (bank 0, below the code)
 EOT        = $04
 CMD_COLOR  = $01       ; in-band: next byte sets txtcolor (1 gray/2 coral/3 white)
 CMD_BULLET = $02       ; in-band: draw the white reply bullet here
+CMD_QUIT   = $03       ; in-band: bridge says session over -> back to the menu
 CMD_HEADER = $0E       ; in-band: header frame follows (title CR subtitle CR)
 
 ; ---- scrollback ring buffer (bank $02): each line = 80 cells of (char,color) ----
@@ -103,6 +104,7 @@ start:
         stz     rb_head         ; ring buffer is used during the splash
         stz     rb_tail         ; (vbl_edge polls) - init before anything serial
         stz     menusel
+        stz     quitflag
 
         lda     #$C1
         sta     NEWVIDEO
@@ -552,7 +554,26 @@ main:
         jsr     send_line
         jsr     spinner
         jsr     recv_reply
-        bra     main
+        lda     quitflag        ; bridge sent CMD_QUIT during this reply?
+        beq     main
+; /quit acknowledged: restore the boot palette and rejoin the menu. The
+; menu re-entry is the same one the AT console uses; Connect redials.
+quit_to_menu:
+        stz     quitflag
+        rep     #$30
+        .a16
+        .i16
+        ldx     #0
+qm_pal: lda     shr_palette_splash,x
+        sta     f:$E19E00,x
+        inx
+        inx
+        cpx     #32
+        bne     qm_pal
+        sep     #$30
+        .a8
+        .i8
+        jmp     menu_screen
 
 ; =====================================================================
 ; draw_box - rules at RULE1/RULE2, "> " at INPUT_ROW, clear input line
@@ -1051,11 +1072,16 @@ sp_lp:
         beq     sp_exj
         cmp     #CMD_HEADER
         beq     sp_exj
+        cmp     #CMD_QUIT
+        beq     sp_q            ; session over: latch it, keep draining to EOT
         cmp     #$20
         bcc     sp_lp           ; CR/LF/NUL before reply -> discard, keep spinning
         cmp     #$7F
         bcs     sp_lp           ; stray high byte -> discard
 sp_exj: brl     sp_exit         ; first printable char in A (sp_exit is far now)
+sp_q:   lda     #1
+        sta     quitflag
+        bra     sp_lp
 sp_draw:
         lda     #2              ; coral word
         sta     txtcolor
@@ -1270,9 +1296,15 @@ rr_nocp:
         beq     rr_bullet
         cmp     #CMD_HEADER     ; 0x0E -> header frame (title CR subtitle CR)
         beq     rr_header
+        cmp     #CMD_QUIT       ; 0x03 -> session over after this reply
+        beq     rr_quit
         cmp     #$0A            ; skip LF
         beq     rr_next
         jsr     cout
+        bra     rr_next
+rr_quit:
+        lda     #1
+        sta     quitflag
         bra     rr_next
 rr_setcp:
         lda     #1
@@ -2121,6 +2153,7 @@ rb_tail:    .res 1          ; serial Rx ring buffer read index
 mascot_at:  .res 2          ; screen address the mascot draws at (splash centers it)
 rowrep:     .res 1          ; splash draw: scanline repeat counter per stored row
 menusel:    .res 1          ; boot menu: selected item 0-3
+quitflag:   .res 1          ; CMD_QUIT seen: return to menu after this reply
 anim_ix:    .res 1          ; menu backdrop: splash_seq cursor
 anim_cd:    .res 1          ; menu backdrop: vblanks left on current frame
 hsavecol:   .res 2          ; do_header: saved cursor
