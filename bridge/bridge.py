@@ -41,10 +41,13 @@ BANNER = [
 HELP = [
     "COMMANDS:",
     "  /help         this list",
-    "  /new          start a fresh conversation",
+    "  /new /clear   start a fresh conversation",
     "  /mode chat    plain Q&A with Claude (safe)",
     "  /mode code    real Claude Code (edits files here!)",
+    "  /model NAME   switch model (opus, sonnet, haiku...)",
     "  /quit         hang up",
+    "code mode: other /commands go to Claude Code itself -",
+    "  /cost /context /compact and skills work; TUI-only ones say so.",
     "",
 ]
 
@@ -163,10 +166,11 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
                 term.write(b"\x03")  # CMD_QUIT: the client returns to its menu
                 term.write(EOT)
                 return
-            term.write(EOT)
-            if isinstance(keep, tuple):
-                backend, mode = keep
-            continue
+            if keep != "pass":  # "pass" = forward to claude like a prompt
+                term.write(EOT)
+                if isinstance(keep, tuple):
+                    backend, mode = keep
+                continue
         if backend is None:
             term.write_line("[no backend]")
             term.write(EOT)
@@ -274,9 +278,10 @@ def run_session(term: Terminal, args) -> None:
             keep = handle_command(user, term, args, backend, mode)
             if keep is False:
                 return
-            if isinstance(keep, tuple):  # (new_backend, new_mode)
-                backend, mode = keep
-            continue
+            if keep != "pass":  # "pass" = forward to claude like a prompt
+                if isinstance(keep, tuple):  # (new_backend, new_mode)
+                    backend, mode = keep
+                continue
 
         if backend is None:
             term.write_line("[no backend - use /mode code or set an API key]")
@@ -311,10 +316,20 @@ def handle_command(cmd: str, term: Terminal, args, backend, mode):
         term.write_line("Goodbye.")
         return False
 
-    if name == "/new":
+    if name in ("/new", "/clear"):
         if backend:
             backend.reset()
         term.write_line("[new conversation]")
+        return None
+
+    if name == "/model" and len(parts) > 1:
+        # each code-mode turn is a fresh `claude -p` process, so a /model
+        # passed through would not stick - remember it bridge-side instead
+        if backend:
+            backend._model = parts[1]
+            if hasattr(backend, "_last_model"):
+                backend._last_model = None  # header shows the new model
+        term.write_line(f"[model: {parts[1]} from the next message]")
         return None
 
     if name == "/mode":
@@ -331,6 +346,8 @@ def handle_command(cmd: str, term: Terminal, args, backend, mode):
         term.write_line(f"[mode: {new_mode}{warn}]")
         return (new_backend, new_mode)
 
+    if mode == "code":
+        return "pass"  # `claude -p` runs many slash commands natively
     term.write_line(f"[unknown command: {name} - try /help]")
     return None
 

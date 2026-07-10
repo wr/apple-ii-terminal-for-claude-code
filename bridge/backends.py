@@ -267,8 +267,14 @@ class CodeBackend(Backend):
             except Exception:
                 proc.kill()
 
+    @staticmethod
+    def _real_model(mid) -> str | None:
+        """Slash-command turns report their model as "<synthetic>" - never
+        let that reach the header or the model cache."""
+        return mid if mid and "<" not in mid else None
+
     def _absorb_init(self, ev: dict) -> None:
-        self._last_model = ev.get("model") or self._last_model
+        self._last_model = self._real_model(ev.get("model")) or self._last_model
         self._last_cwd = ev.get("cwd") or getattr(self, "_last_cwd", None)
         self._last_version = ev.get("claude_code_version") or getattr(
             self, "_last_version", None)
@@ -346,7 +352,8 @@ class CodeBackend(Backend):
             return
 
         if etype == "assistant":
-            self._last_model = event.get("message", {}).get("model") or self._last_model
+            self._last_model = self._real_model(
+                event.get("message", {}).get("model")) or self._last_model
             for block in event.get("message", {}).get("content", []):
                 btype = block.get("type")
                 if btype == "text":

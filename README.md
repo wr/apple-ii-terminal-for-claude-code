@@ -115,9 +115,11 @@ Two backends:
   picks the directory; `--permission-mode acceptEdits` lets it edit without
   asking (a headless session can't prompt you).
 
-Slash commands typed on the II are handled by the bridge: `/help`, `/new`
-(fresh conversation), `/mode chat`, `/mode code`, `/quit`. Anything else goes
-to Claude.
+Slash commands typed on the II: the bridge handles `/help`, `/new`/`/clear`
+(fresh conversation), `/mode chat`, `/mode code`, `/model NAME`, and `/quit`.
+In code mode every other `/command` is forwarded to the `claude` CLI, which
+runs most of them for real — `/cost`, `/context`, `/compact`, and your
+installed skills all work from a 40-year-old keyboard.
 
 A listening bridge (`--telnet`) is a `claude` CLI anyone on your network can
 reach, so it locks itself behind a **pairing code** by default: the bridge
