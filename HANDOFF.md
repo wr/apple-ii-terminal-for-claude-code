@@ -31,9 +31,13 @@ Claude Code-style session UI (transcript, scrollback, spinner, pinned input).
 - **WiModem 232 Pro** on the modem port (mini-DIN-8). 9600 8N1. Configured:
   phone book entry 0 = `10.0.1.188:6400` (the Mac), autodial-on-power-up
   (`AT*A1`), saved with `AT&W`.
-- **FloppyEmu** as the disk drive, booting a **ProDOS** volume `/UTILITIES`.
-  The SD card is never written from the Mac (FloppyEmu "file not contiguous"
-  trap — two lost hours, do not retry). Everything ships over serial.
+- **FloppyEmu** as the disk drive. The "file not contiguous" mystery is
+  SOLVED (2026-07-09): the Emu refuses image files that land on fragmented
+  FAT space; image content was never the problem. Reliable write path from
+  the Mac: `dd if=new.dsk of=/Volumes/CARD/existing.dsk conv=notrunc` over
+  an already-working file (reuses its clusters). Serial LOADER remains the
+  no-card-swap dev path. The Emu can also boot the DOS 3.3 CLAUDEG.dsk
+  (master-based) directly, alongside the **ProDOS** volume `/UTILITIES`.
 - On the ProDOS disk: `COBJ` (the client binary), `LOADER` (serial installer,
   BASIC), `TERM` (mini terminal, BASIC), `STARTUP` (auto-BRUNs COBJ with an
   any-key-for-BASIC escape window), LAUNCHER/SYSUTIL/FASTCOPY renamed `.SYS`
