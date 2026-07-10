@@ -2,21 +2,25 @@
 # Install or update the Claude Code ][ disk image on a FloppyEmu SD card.
 #
 # FloppyEmu requires each image file to be CONTIGUOUS on the card's FAT
-# filesystem. A plain copy is fine on a healthy card, but once the card's
-# free space fragments, freshly copied files get split and the Emu refuses
-# them ("file not contiguous"). This installer avoids that:
-#   - update:  if the image already exists on the card at the same size, it
-#              is overwritten IN PLACE (same clusters, new bytes) - this can
-#              never fragment, so updates always work.
-#   - install: plain copy + cleanup of macOS "._*" droppings; if the Emu
-#              still complains, run with --repair once.
-#   - repair:  repacks every file on the card (copy off, wipe, copy back),
-#              which defragments it; plain copies work again afterwards.
+# filesystem, and macOS makes that surprisingly hard (verified by reading
+# the FAT directly - see tools/fatmap.py):
+#   - macOS's FAT driver allocates first-fit from the front of the card, so
+#     once deleted files have left holes, a fresh copy is shredded into them.
+#   - Spotlight/.fseventsd/AppleDouble "._*" writes interleave with a copy
+#     and split it even on an otherwise-clean card.
+# Strategy:
+#   - update:  if the image already exists on the card at the same size,
+#              overwrite IN PLACE (dd conv=notrunc). Cluster layout is
+#              reused, so a file the Emu already loads keeps loading.
+#   - install: copy with xattrs stripped (no "._*" twin) + dot_clean.
+#   - repair:  copy every file off, wipe (except SIP-protected dirs), copy
+#              back in one pass. Frees holes and repacks contiguously.
+#              Run once if the Emu reports "file not contiguous".
 #
 # Usage:
 #   tools/install-sd.sh [image.dsk] [/Volumes/CARD]
 #   tools/install-sd.sh --repair [/Volumes/CARD]
-set -euo pipefail
+set -u
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -30,6 +34,11 @@ find_card() {
     echo "${cards[0]}"
 }
 
+quiet_card() {  # stop macOS services from allocating clusters mid-copy
+    mdutil -i off "$1" >/dev/null 2>&1 || true       # may need sudo; best-effort
+    touch "$1/.fseventsd/no_log" 2>/dev/null || true
+}
+
 repair=false
 if [ "${1:-}" = "--repair" ]; then
     repair=true
@@ -37,39 +46,48 @@ if [ "${1:-}" = "--repair" ]; then
 fi
 
 if $repair; then
-    card="${1:-$(find_card)}"
+    card="${1:-$(find_card)}" || exit 1
     [ -d "$card" ] || die "no such volume: $card"
     echo "This repacks EVERY file on $card (copy off, wipe, copy back)."
     read -r -p "Continue? [y/N] " a
     [ "$a" = "y" ] || [ "$a" = "Y" ] || exit 1
-    tmp=$(mktemp -d)
+    tmp=$(mktemp -d) || die "mktemp failed"
     echo "copying card contents to $tmp ..."
     rsync -a --exclude='._*' --exclude='.Spotlight-V100' --exclude='.fseventsd' \
-          --exclude='.Trashes' --exclude='.DS_Store' "$card/" "$tmp/"
-    echo "wiping card ..."
-    find "$card" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          --exclude='.Trashes' --exclude='.DS_Store' "$card/" "$tmp/" \
+        || die "backup to $tmp failed - card untouched"
+    quiet_card "$card"
+    echo "wiping card (keeping SIP-protected system dirs) ..."
+    find "$card" -mindepth 1 -maxdepth 1 \
+         ! -name '.Spotlight-V100' ! -name '.fseventsd' ! -name '.Trashes' \
+         -exec rm -rf {} +   # tolerate stragglers; backup is safe in $tmp
     echo "copying back in one pass ..."
-    rsync -a "$tmp/" "$card/"
+    if ! rsync -a "$tmp/" "$card/"; then
+        die "restore failed - your files are safe in $tmp"
+    fi
     dot_clean -m "$card" 2>/dev/null || true
     sync
-    rm -rf "$tmp"
-    echo "done - files are repacked contiguously; plain copies will work again"
+    echo "done - files repacked contiguously (backup kept at $tmp until you delete it)"
     exit 0
 fi
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 image="${1:-$script_dir/../apple2gs/CLAUDEG.dsk}"
 [ -f "$image" ] || die "image not found: $image (run apple2gs/build.sh first?)"
-card="${2:-$(find_card)}"
+card="${2:-$(find_card)}" || exit 1
 [ -d "$card" ] || die "no such volume: $card"
 
 dest="$card/$(basename "$image")"
 if [ -f "$dest" ] && [ "$(stat -f%z "$image")" -eq "$(stat -f%z "$dest")" ]; then
-    dd if="$image" of="$dest" conv=notrunc status=none
+    dd if="$image" of="$dest" conv=notrunc status=none || die "dd failed"
+    rm -f "$card/._$(basename "$image")"
     sync
-    echo "updated in place: $dest (clusters reused - cannot fragment)"
+    echo "updated in place: $dest (cluster layout reused)"
+    echo "note: this preserves the file's existing layout - if the Emu already"
+    echo "loads it, the update is safe; if it was refused, run --repair first"
 else
-    cp "$image" "$dest"
+    quiet_card "$card"
+    cp -X "$image" "$dest" || die "copy failed"
     dot_clean -m "$card" 2>/dev/null || true
     rm -f "$card/._$(basename "$image")"
     sync
