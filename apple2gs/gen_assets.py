@@ -313,7 +313,8 @@ def splash_extract():
     down_x = [round(sum(c[0] for c in cells) / len(cells))
               for cells in frame_cells
               if len(cells) >= 3 and sum(c[1] for c in cells) / len(cells) >= h - 6]
-    rest_x = round(sum(down_x) / len(down_x)) - 3 if down_x else 4
+    # -2 (not the centering -3): parked one column nearer Clawd, per Wells
+    rest_x = round(sum(down_x) / len(down_x)) - 2 if down_x else 4
     for m, cells in zip(mats, frame_cells):
         if len(cells) < 3:
             continue
@@ -337,13 +338,13 @@ def splash_extract():
     PROP = [
         ".....GGGGG..",
         "GGGGGGGGGG..",
-        "GGGGGGGGGGOO",
-        "GGGGGGGGGGOO",
-        "GGGGGGGGGGOO",
-        "GGGGGGGGGGOO",
-        "GGGGGGGGGGOO",
-        "GGGGGGGGGGOO",
-        "GGGGGGGGGG..",
+        "GGGGGGGGGGO.",
+        "GGGGGGGGGGO.",
+        "GGGGGGGGGGO.",
+        "GGGGGGGGGGO.",
+        "GGGGGGGGGGO.",
+        "GGGGGGGGGGO.",
+        "GGGGGGGGGGO.",
         "GGGGGGGGGG..",
         "GGGGGGGGGG..",
         ".GKKKKKKG...",
