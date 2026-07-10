@@ -104,6 +104,10 @@ class _TCPChannel(Channel):
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
         self._sock.settimeout(0.2)
+        try:
+            self.peer = sock.getpeername()[0]
+        except OSError:
+            self.peer = None
 
     def read_byte(self) -> Optional[int]:
         try:

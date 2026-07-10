@@ -200,7 +200,47 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
         log(f"reply done ({n} chunks from {mode})")
 
 
+_paired_peers: set = set()
+
+
+def require_pairing(term: Terminal, args) -> bool:
+    """Gate a listening bridge behind a short code shown on the host.
+
+    A --telnet bridge in code mode hands anyone on the LAN a `claude` CLI
+    running on this machine, so an unpaired caller must type the code
+    printed at startup before the session proceeds. Pairing sticks to the
+    peer's IP for the life of the process (reconnects don't re-ask).
+    Returns False if the caller hung up before pairing."""
+    peer = getattr(term.ch, "peer", None)
+    if peer in _paired_peers:
+        return True
+    log(f"pairing: waiting for code from {peer} (code: {args.pair_code})")
+    while not term.closed:
+        term.write_line("Locked. Enter the pairing code shown on the bridge.")
+        if args.app:
+            term.write(EOT)
+        line = term.read_line()
+        if line is None:
+            return False
+        line = line.strip()
+        if line.upper().startswith("ATD") or not line:
+            continue  # the client's auto-dial / blank lines aren't guesses
+        if line == args.pair_code:
+            _paired_peers.add(peer)
+            term.write_line("Paired.")
+            log(f"pairing: {peer} paired")
+            return True
+        log(f"pairing: wrong code from {peer}")
+        time.sleep(1.0)  # no rapid guessing
+    return False
+
+
 def run_session(term: Terminal, args) -> None:
+    # --bootstrap serves a binary to the LOADER, which can't type a code;
+    # nothing sensitive is reachable on that path, so it stays open.
+    if args.pair_code and not getattr(args, "bootstrap", None) \
+            and not require_pairing(term, args):
+        return
     cols = args.cols
     mode = args.backend
     backend = None
@@ -331,6 +371,11 @@ def parse_args(argv=None):
 
     p.add_argument("--host", default="0.0.0.0", help="telnet bind address")
     p.add_argument("--port", type=int, default=6400, help="telnet port (default 6400)")
+    p.add_argument("--pair-code", default="",
+                   help="pairing code callers must type once per bridge run "
+                        "(telnet default: random; see --no-pair)")
+    p.add_argument("--no-pair", action="store_true",
+                   help="telnet: skip the pairing gate (trusted networks only)")
     p.add_argument("--telnet-negotiate", action="store_true",
                    help="do telnet IAC negotiation (for a raw `telnet` client)")
 
@@ -375,9 +420,19 @@ def main(argv=None) -> int:
         newline="\r" if args.app else "\r\n",  # app uses bare CR
     )
 
+    if args.telnet and not args.no_pair and not args.bootstrap:
+        if not args.pair_code:
+            import secrets
+            args.pair_code = f"{secrets.randbelow(10000):04d}"
+    elif not args.pair_code:
+        args.pair_code = ""
+
     print(f"[bridge] {transport.describe()}")
     print(f"[bridge] {args.cols} cols, backend={args.backend}"
           f"{', app protocol' if args.app else ''}. Ctrl-C to stop.")
+    if args.pair_code:
+        print(f"[bridge] PAIRING CODE: {args.pair_code}  "
+              "(type it on the Apple II once; --no-pair to disable)")
     if args.telnet:
         print("[bridge] waiting for the Apple II to connect...")
 

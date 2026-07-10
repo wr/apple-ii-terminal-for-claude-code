@@ -119,6 +119,12 @@ Slash commands typed on the II are handled by the bridge: `/help`, `/new`
 (fresh conversation), `/mode chat`, `/mode code`, `/quit`. Anything else goes
 to Claude.
 
+A listening bridge (`--telnet`) is a `claude` CLI anyone on your network can
+reach, so it locks itself behind a **pairing code** by default: the bridge
+prints a 4-digit code at startup, and the first thing a new caller types has
+to be that code. Pairing sticks per device until the bridge restarts.
+`--pair-code 1234` picks your own; `--no-pair` turns the gate off.
+
 Flags worth knowing:
 
 | Flag | What it's for |
