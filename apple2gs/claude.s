@@ -259,6 +259,8 @@ mk_instr:
 ; connect: wipe the menu, dial, spin for ~3s, then the session
 act_connect:
         jsr     music_stop
+        lda     rb_head         ; drop stale rx from a previous session
+        sta     rb_tail
         lda     #20
         jsr     clear_rowA
         lda     #21
@@ -564,6 +566,21 @@ main:
         jsr     draw_box        ; clear typed text from the input box on Enter
         jsr     echo_user
         jsr     send_line
+        ; /quit is honored locally too: with a dead link the bridge's
+        ; CMD_QUIT ack never comes and the spinner would spin forever.
+        ; (A live bridge still gets the line and hangs up on its side.)
+        lda     linelen
+        cmp     #5
+        bne     mn_spin
+        ldx     #4
+mn_qck: lda     linebuf,x
+        ora     #$20            ; case-fold ('/' has bit 5 set already)
+        cmp     str_quit,x
+        bne     mn_spin
+        dex
+        bpl     mn_qck
+        jmp     quit_to_menu
+mn_spin:
         jsr     spinner
         jsr     recv_reply
         lda     quitflag        ; bridge sent CMD_QUIT during this reply?
@@ -572,6 +589,8 @@ main:
 ; menu re-entry is the same one the AT console uses; Connect redials.
 quit_to_menu:
         stz     quitflag
+        lda     rb_head         ; drop buffered rx (a live bridge's goodbye
+        sta     rb_tail         ; bytes shouldn't leak into the next session)
         rep     #$30
         .a16
         .i16
@@ -1070,6 +1089,17 @@ spinner:
         lda     #5              ; seconds until the word rotates
         sta     sp_wordcd
 sp_lp:
+        lda     KBD             ; Esc aborts the wait - escape hatch when the
+        bpl     sp_nk           ; link is dead and no reply will ever come
+        sta     KBDSTRB
+        and     #$7F
+        cmp     #$1B
+        bne     sp_nk
+        lda     #1
+        sta     quitflag
+        lda     #EOT            ; fake end-of-reply: recv_reply finishes
+        bra     sp_exj          ; instantly, main sees quitflag -> menu
+sp_nk:
         jsr     havebyte
         beq     sp_draw         ; no byte -> keep spinning
         ; a byte is waiting: consume it, discard leading control bytes so the
@@ -2308,6 +2338,7 @@ str_welcome:.byte "Welcome to Claude Code ][",0
 str_ver:    .byte "v0.1.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
+str_quit:   .byte "/quit"                 ; matched locally in the main loop
 dial_glyphs:.byte "*+:-"                    ; connect spinner cycle
 menu_ptrs:  .word mi0, mi1, mi2, mi3
 mi0:        .byte "1. Connect",0
