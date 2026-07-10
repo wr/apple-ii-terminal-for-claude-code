@@ -20,8 +20,22 @@ python3 gen_assets.py
 ca65 --cpu 65816 -o claude.o claude.s
 ld65 -C claude.cfg -o claude.obj claude.o
 
+# 8-bit client (IIe/IIc/IIc+/II+) shares the disk
+ca65 --cpu 6502 -o ../apple2/claude2.o ../apple2/claude2.s
+ld65 -C ../apple2/claude2.cfg -o COBJ8 ../apple2/claude2.o
+
+# HELLO picks the client for the machine: IIgs -> COBJ (SHR), everything
+# else -> COBJ8 (text). GS vs enhanced IIe ($FBB3=6, $FBC0=$E0 on both)
+# is split by the GS id hook: SEC / JSR $FE1F / carry clear = GS. The
+# stub POKEd at $300 stores the carry at 783.
 # dos33 (BSD getopt) needs flags BEFORE the disk, and no '.' in filenames.
-printf '10 PRINT CHR$(4);"BRUN COBJ"\n' > hello.bas
+cat > hello.bas <<'BAS'
+10 P1 = PEEK(64435): IF P1 <> 6 THEN 100
+20 P2 = PEEK(64448): IF P2 = 0 OR P2 = 234 THEN 100
+30 POKE 768,56: POKE 769,32: POKE 770,31: POKE 771,254: POKE 772,169: POKE 773,0: POKE 774,42: POKE 775,141: POKE 776,15: POKE 777,3: POKE 778,96: CALL 768
+40 IF PEEK(783) = 0 THEN PRINT CHR$(4);"BRUN COBJ"
+100 PRINT CHR$(4);"BRUN COBJ8"
+BAS
 $TOK < hello.bas > HH
 cp claude.obj COBJ
 
@@ -30,6 +44,7 @@ $DOS33 CLAUDEG.dsk UNLOCK HELLO
 $DOS33 -y CLAUDEG.dsk DELETE HELLO
 $DOS33 -y CLAUDEG.dsk SAVE A HH HELLO
 $DOS33 -a 0x4000 CLAUDEG.dsk BSAVE COBJ COBJ
+$DOS33 -a 0x2000 CLAUDEG.dsk BSAVE COBJ8 COBJ8
 $DOS33 CLAUDEG.dsk CATALOG
 # convenience deploy for KEGS (~/config.kegs boots this path); harmless if absent
 cp CLAUDEG.dsk "$HOME/Downloads/CLAUDEG.dsk" 2>/dev/null || true
