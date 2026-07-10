@@ -757,21 +757,22 @@ main:
         lda     linelen
         beq     main
         jsr     draw_box
-        jsr     echo_user
-        jsr     send_line
-        ; /quit honored locally: works with a dead link too
+        ; /quit handled locally and BEFORE any transmit - otherwise it
+        ; hits the wire and a modem in command mode interprets it
         lda     linelen
         cmp     #5
-        bne     @spin
+        bne     @notq
         ldx     #4
 @q:     lda     linebuf,x
         ora     #$20
         cmp     str_quit,x
-        bne     @spin
+        bne     @notq
         dex
         bpl     @q
         jmp     quit_to_menu
-@spin:  jsr     spinner
+@notq:  jsr     echo_user
+        jsr     send_line
+        jsr     spinner
         jsr     recv_reply
         lda     quitflag
         beq     main

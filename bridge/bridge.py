@@ -22,6 +22,8 @@ Type `/help` on the Apple II once connected.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import time
 
@@ -204,7 +206,30 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
         log(f"reply done ({n} chunks from {mode})")
 
 
-_paired_peers: set = set()
+def _pairing_store() -> str:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "claude-ii-terminal", "paired.json")
+
+
+def _load_paired() -> set:
+    try:
+        with open(_pairing_store()) as f:
+            return set(json.load(f))
+    except (OSError, ValueError):
+        return set()
+
+
+def _save_paired(peers: set) -> None:
+    path = _pairing_store()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(sorted(peers), f)
+    except OSError as exc:
+        log(f"pairing: could not persist ({exc})")
+
+
+_paired_peers: set = _load_paired()
 
 
 def require_pairing(term: Terminal, args) -> bool:
@@ -235,7 +260,8 @@ def require_pairing(term: Terminal, args) -> bool:
             continue  # the client's auto-dial / blank lines aren't guesses
         if line == args.pair_code:
             _paired_peers.add(peer)
-            log(f"pairing: {peer} paired")
+            _save_paired(_paired_peers)  # survives bridge restarts
+            log(f"pairing: {peer} paired (remembered)")
             term.write_line("Paired - go ahead.")
             if args.app:
                 term.write(EOT)  # the client waits on end-of-reply
@@ -472,6 +498,9 @@ def main(argv=None) -> int:
     if args.pair_code:
         print(f"[bridge] PAIRING CODE: {args.pair_code}  "
               "(type it on the Apple II once; --no-pair to disable)")
+        if _paired_peers:
+            print(f"[bridge] {len(_paired_peers)} device(s) already paired "
+                  f"(remembered in {_pairing_store()})")
     if args.telnet:
         print("[bridge] waiting for the Apple II to connect...")
 

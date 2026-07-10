@@ -581,6 +581,12 @@ session_start:
         ora     #$0D            ; DEBUG breadcrumb: YELLOW border = init complete
         sta     BORDERCOL
 
+        lda     #$10            ; sample DCD now: high = a real carrier, so
+        sta     SCC_STAT        ; gate future sends on it dropping; low =
+        lda     SCC_STAT        ; don't gate (KEGS / a modem without DCD)
+        and     #$08
+        sta     dcd_active
+
 ; =====================================================================
 ; main loop
 ; =====================================================================
@@ -593,23 +599,32 @@ main:
         lda     linelen
         beq     main
         jsr     draw_box        ; clear typed text from the input box on Enter
-        jsr     echo_user
-        jsr     send_line
-        ; /quit is honored locally too: with a dead link the bridge's
-        ; CMD_QUIT ack never comes and the spinner would spin forever.
-        ; (A live bridge still gets the line and hangs up on its side.)
+        ; /quit is handled locally and BEFORE any transmit - otherwise the
+        ; line hits the wire, and with no carrier the modem (in command
+        ; mode) interprets it (Wells saw "/quit" land on the WiModem).
         lda     linelen
         cmp     #5
-        bne     mn_spin
+        bne     mn_notq
         ldx     #4
 mn_qck: lda     linebuf,x
         ora     #$20            ; case-fold ('/' has bit 5 set already)
         cmp     str_quit,x
-        bne     mn_spin
+        bne     mn_notq
         dex
         bpl     mn_qck
         jmp     quit_to_menu
+mn_notq:
+        jsr     echo_user
+        jsr     check_carrier   ; don't spray text at a modem in command mode
+        bcs     mn_spin
+        jsr     say_nocarr      ; carrier gone -> note it, drop to the menu
+        ldx     #120
+mn_npz: jsr     vbl_edge
+        dex
+        bne     mn_npz
+        jmp     quit_to_menu
 mn_spin:
+        jsr     send_line
         jsr     spinner
         jsr     recv_reply
         lda     quitflag        ; bridge sent CMD_QUIT during this reply?
@@ -822,6 +837,44 @@ sl_lp:  lda     linebuf,x
         bne     sl_lp
 sl_cr:  lda     #$0D
         jsr     sccput
+        rts
+
+; check_carrier - carry SET = ok to transmit. Only gates when DCD was
+; asserted at session start (dcd_active): a modem that doesn't drive
+; DCD, or KEGS, is never blocked, but a real carrier that later drops
+; is caught before we spray text at a modem back in command mode.
+; RR0 bit3 = DCD; rb_poll leaves the SCC register pointer at 0.
+check_carrier:
+        .a8
+        .i8
+        lda     dcd_active
+        beq     cc_ok
+        lda     #$10            ; WR0 Reset Ext/Status -> RR0 tracks the pin
+        sta     SCC_STAT
+        lda     SCC_STAT        ; RR0
+        and     #$08            ; DCD
+        beq     cc_no
+cc_ok:  sec
+        rts
+cc_no:  clc
+        rts
+
+; say_nocarr - note the dropped carrier in the transcript (coral)
+say_nocarr:
+        .a8
+        .i8
+        lda     #2
+        sta     txtcolor
+        ldx     #0
+sc_lp:  lda     str_nocarr,x
+        beq     sc_d
+        phx
+        jsr     cout
+        plx
+        inx
+        bne     sc_lp
+sc_d:   lda     #$0D
+        jsr     cout
         rts
 
 ; =====================================================================
@@ -2273,8 +2326,8 @@ dl2:    iny
 ; ($C03C ctrl / $C03D data / $C03E-F address). Never write a $00
 ; sample: it halts the oscillator.
 ; =====================================================================
-MUS_VOL0 = $90          ; melody oscillator volume
-MUS_VOL1 = $60          ; bass oscillator volume
+MUS_VOL0 = $2C          ; melody oscillator volume (~30%; both voices now
+MUS_VOL1 = $1C          ; bass osc volume - the $E1 fix made the bass audible)
 GLU_CTRL = $C03C
 GLU_DATA = $C03D
 GLU_ALO  = $C03E
@@ -2479,6 +2532,7 @@ str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
 str_dfail:  .byte "Dial failed - try the modem console",0
 str_quit:   .byte "/quit"                 ; matched locally in the main loop
+str_nocarr: .byte "* connection lost - back to menu",0
 dial_glyphs:.byte "*+:-"                    ; connect spinner cycle
 menu_ptrs:  .word mi0, mi1, mi2, mi3
 mi0:        .byte "1. Connect",0
@@ -2528,6 +2582,7 @@ menusel:    .res 1          ; boot menu: selected item 0-3
 quitflag:   .res 1          ; CMD_QUIT seen: return to menu after this reply
 mus_on:     .res 1          ; nonzero while the menu ditty plays
 dialres:    .res 1          ; dial window: 0 silence, 1 CONNECT, 2 failure
+dcd_active: .res 1          ; nonzero if DCD was asserted at session start
 mdm_c1:     .res 1          ; dial window: first char of current rx line
 dcol:       .res 1          ; dial window: echo column on row 22
 mus_cd0:    .res 1          ; voice 0: vblanks left on current note
