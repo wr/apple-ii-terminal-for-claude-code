@@ -29,6 +29,7 @@ invflag = $FE           ; 0 normal, nonzero inverse
 ; ---- hardware
 KBD     = $C000
 KBDSTRB = $C010
+SPKR    = $C030         ; 1-bit speaker toggle
 STORE80ON  = $C001      ; write: 80STORE on (PAGE2 banks text page)
 STORE80OFF = $C000      ; write
 COL80ON    = $C00D      ; write
@@ -76,6 +77,8 @@ entry:
         sta     invflag
         lda     #2
         sta     dly_y           ; 1MHz frame delay; IIc+ scales it up
+        lda     #1
+        sta     spdm            ; speaker-delay multiplier (4 on IIc+)
 
         ; ---- machine id (Apple II Misc TN #7)
         lda     $FBB3
@@ -101,10 +104,12 @@ entry:
 @iic:   lda     #1
         sta     has80
         lda     $FBBF
-        cmp     #$05            ; IIc Plus runs 4x - scale the delay loop
+        cmp     #$05            ; IIc Plus runs 4x - scale the delay loops
         bne     @setw
         lda     #8
         sta     dly_y
+        lda     #4
+        sta     spdm
 @setw:
         ; does $C019 really toggle here? The IIe's VBLBAR does; the
         ; IIc's $C019 is interrupt plumbing and may sit still. Probe
@@ -553,10 +558,25 @@ menu_screen:
         lda     #9
         jsr     draw_at
         STR     str_by, 2, 23
+        jsr     menu_draw       ; menu visible before the jingle starts
+        jsr     jingle          ; once per menu visit; any key skips it
+        lda     #0
+        sta     blinkct
 menu_loop:
         jsr     menu_draw
-@key:   jsr     rb_poll
-        lda     KBD
+@key:   jsr     frame_wait      ; ~1 frame per pass (rb_poll inside);
+        inc     blinkct         ; also paces the mascot's blink
+        lda     blinkct
+        cmp     #170            ; ~3s: eyes shut...
+        bne     @b2
+        jsr     eyes_close
+@b2:    lda     blinkct
+        cmp     #178            ; ...for ~130ms
+        bne     @b3
+        jsr     eyes_open
+        lda     #0
+        sta     blinkct
+@b3:    lda     KBD
         bpl     @key
         sta     KBDSTRB
         and     #$7F
@@ -575,23 +595,103 @@ menu_loop:
         sta     menusel
         jmp     @go
 @up:    lda     menusel
-        beq     @key
+        beq     @kj
         dec     menusel
         jmp     menu_loop
 @dn:    lda     menusel
         cmp     #3
-        bcs     @key
+        bcs     @kj
         inc     menusel
         jmp     menu_loop
+@kj:    jmp     @key
 @go:    lda     menusel
-        beq     act_connect
-        cmp     #1
+        bne     @g1
+        jmp     act_connect
+@g1:    cmp     #1
         beq     @modem
         cmp     #2
         beq     @instr
         jmp     act_quit
 @modem: jmp     page_modem
 @instr: jmp     page_instr
+
+; eyes_close/open - the menu mascot's blink. His eyes are dark cells
+; punched out of the lit body: closing = filling them with inverse
+; blocks. Eye cells sit at mascot row+1, columns +4 and +11.
+eyes_close:
+        lda     #$20            ; inverse space = lit block
+        bne     eyes_put
+eyes_open:
+        lda     #$A0            ; normal space = dark
+eyes_put:
+        sta     tmp3
+        lda     width
+        sec
+        sbc     #16
+        lsr
+        clc
+        adc     #4              ; left eye
+        sta     curx
+        lda     #3              ; mascot top (2) + 1
+        sta     cury
+        lda     tmp3
+        jsr     putscr
+        lda     width
+        sec
+        sbc     #16
+        lsr
+        clc
+        adc     #11             ; right eye
+        sta     curx
+        lda     #3
+        sta     cury
+        lda     tmp3
+        jmp     putscr
+
+; jingle - the menu ditty (GROOVE's melody), squeezed through the
+; 1-bit speaker as cycle-counted square waves. Plays once; any key
+; aborts (the keypress is left for the menu loop). spdm stretches the
+; half-period loop on a 4MHz IIc+. Rests are notes with bit7 set on
+; the delay byte: same timing, no speaker toggles.
+jingle:
+        ldx     #0
+@note:  lda     jtab_d,x
+        beq     @done           ; 0 = end of tune
+        sta     tmp             ; delay + rest flag
+        and     #$7F
+        sta     tmp2            ; delay proper
+        lda     jtab_w,x
+        sta     tmp4            ; wave count
+@wave:  jsr     jhalf
+        jsr     jhalf
+        dec     tmp4
+        bne     @wave
+        jsr     rb_poll
+        lda     KBD             ; a key skips the rest of the tune
+        bmi     @done
+        inx
+        bne     @note
+@done:  rts
+
+jhalf:  bit     tmp             ; rest? (bit7)
+        bmi     @quiet
+        bit     SPKR
+@quiet: ldx     spdm
+@rep:   ldy     tmp2
+@d:     dey
+        bne     @d
+        dex
+        bne     @rep
+        rts
+
+; GROOVE's melody at ~144bpm, up an octave (the delay byte's low 7
+; bits are the half-period in 5-cycle units at 1MHz, so the beeper's
+; floor is ~790Hz - and jingles live up there anyway). waves = full
+; cycles per note; long notes are split so waves fits a byte.
+jtab_d: .byte 126, 104|$80, 96, 85, 76, 85, 96, 96, 104|$80
+        .byte 114, 104|$80, 96, 85, 64, 76, 85, 85, 96, 0
+jtab_w: .byte 163, 200,    145, 82,183, 82,145,146, 134
+        .byte 183, 200,    145, 82,218, 92,163,163, 145
 
 menu_draw:
         ldx     #0
@@ -1236,5 +1336,7 @@ tmp3:       .res 1
 tmp4:       .res 1
 tcurx:      .res 1          ; transcript cursor parked during input
 tcury:      .res 1
-dly_y:      .res 1          ; frame-delay outer count (13; 52 on IIc+)
+dly_y:      .res 1          ; frame-delay outer count (2; 8 on the IIc+)
+spdm:       .res 1          ; speaker half-period multiplier (1; 4 on IIc+)
+blinkct:    .res 1          ; menu: frames since the last blink
 linebuf:    .res 128

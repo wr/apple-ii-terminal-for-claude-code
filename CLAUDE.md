@@ -10,25 +10,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A bridge that turns a real Apple IIe/IIc/IIgs into a terminal for Claude. Two halves that must stay in sync:
+A bridge that turns a real Apple II into a terminal for Claude Code. Three pieces that must stay in sync:
 
 - **`bridge/`** — Python, runs on a modern host. Reads a line from the Apple II, sends it to Claude, streams the reply back flattened to 7-bit ASCII and word-wrapped to 40/80 cols.
-- **`apple2gs/claude.s`** — the primary client: a 65816 assembly program running in IIgs **Super Hi-Res 640 mode** (4 colors). Boot flow: hardware init → `scc_init` → boot menu (Connect / Hayes AT console / Instructions / Quit to BASIC) with the animated Clawd splash looping behind it → Connect dials the modem and enters the session UI (scrolling transcript, static mascot, spinner, scrollback). `apple2/*.bas` are simpler text-mode BASIC clients; a stock serial terminal also works as a fallback.
+- **`apple2gs/claude.s`** — the IIgs client: 65816, **Super Hi-Res 640 mode** (4 colors). Boot flow: hardware init → `scc_init` → boot menu (Connect / Hayes AT console / Instructions / Quit to BASIC) with the animated Clawd splash and chiptune (Ensoniq DOC) → Connect dials the modem and enters the session UI (scrolling transcript, static mascot, spinner, scrollback).
+- **`apple2/claude2.s`** — the 8-bit client: plain 6502 (no 65C02 ops), text mode. Runs on IIe (80-col with an aux card, 40 without), IIc, IIc Plus, and II/II+. Same menu and session shape, inverse-block mascot (with a blink), 1-bit speaker jingle. Serial = 6551 ACIA at the slot-2 addresses (SSC in slot 2 == the IIc/IIc+ built-in modem port).
+
+**One disk boots everything**: `build.sh` assembles both clients into `CLAUDE.dsk`, and the disk's HELLO reads the ROM ID bytes (Apple II Misc TN #7, plus the `$FE1F` carry probe to split IIgs from enhanced IIe) and BRUNs `COBJ` (GS) or `COBJ8` (everything else).
 
 The bridge sends **only** printable ASCII + CR/LF plus a small in-band control scheme (below). All layout and color live on the Apple II side.
 
 ## Commands
 
-Build/preview/run the IIgs client (from `apple2gs/`):
+Build everything (from `apple2gs/`):
 
 ```bash
-./build.sh                 # gen_assets.py -> ca65/ld65 -> inject into DOS 3.3 master -> ~/Downloads/CLAUDE.dsk
-python3 gen_assets.py      # regenerate assets.inc (palettes, font, mascot, splash frames) only
-python3 preview.py assets.inc out.png   # render the SHR screen to PNG WITHOUT an emulator
+./build.sh                 # both clients -> inject into DOS 3.3 master -> CLAUDE.dsk (+ ~/Downloads copy for KEGS)
+python3 gen_assets.py      # regenerate assets.inc (palettes, font, mascot, splash frames, music) only
+python3 preview.py assets.inc out.png   # render the GS session screen to PNG WITHOUT an emulator
 ../tools/install-sd.sh     # put the built image on a FloppyEmu SD card safely
 ```
 
-`build.sh` needs the `cc65` toolchain (`ca65`/`ld65`), the dos33fsprogs utilities at `/tmp/dos33fsprogs/…`, and Python with **Pillow** (`gen_assets.py` decodes `clawd.gif` at build time to generate the splash frames). The output disk is the vendored DOS 3.3 System Master (`dos33-master-jan83.dsk`) with HELLO replaced and COBJ added — never a from-scratch image.
+`build.sh` needs the `cc65` toolchain (`ca65`/`ld65`), a [dos33fsprogs](https://github.com/deater/dos33fsprogs) build (default `/tmp/dos33fsprogs`, override with `DOS33FSPROGS`), and Python with **Pillow** (`gen_assets.py` decodes `clawd.gif` at build time to generate the splash frames). The output disk is the vendored DOS 3.3 System Master (`dos33-master-jan83.dsk`) with HELLO replaced and the client binaries added — never a from-scratch image (from-scratch images have burned us).
 
 Run the bridge against KEGS (KEGS F4 → Serial Slot 2 → **Incoming**, which listens on TCP 6502):
 
@@ -37,16 +40,18 @@ cd bridge
 python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
 ```
 
-- `--app` enables the native-client protocol (bridge stays silent, frames replies with `EOT` = `0x04`). Required for `claude.s`.
+- `--app` enables the native-client protocol (bridge stays silent, frames replies with `EOT` = `0x04`). Required for both native clients.
 - `--backend code` runs the real `claude` CLI on the host; `--backend chat` (default) is Messages-API Q&A.
 - Serial hardware instead of KEGS: `--serial /dev/tty.usbserial-XXXX --baud 9600`.
+- A listening bridge (`--telnet`) locks itself behind a 4-digit pairing code; paired peers persist in `~/.config/claude-ii-terminal/paired.json`. `--no-pair` disables.
 
 ## The edit → see-it loop
 
-- **`preview.py` is the fast path.** It reproduces `claude.s`'s exact SHR pixel math and renders at KEGS's real display geometry (640×200 stretched to 4:3 → pixels are ~0.42 wide : 1 tall, i.e. narrow/tall). What the PNG shows is what KEGS shows. Use it before booting the emulator. It writes both a full screen and a zoomed `*_mascot.png`.
-- **Client change** (`claude.s`/`gen_assets.py`): `./build.sh`, then **Ctrl-⌘-Reset** in KEGS to reboot from the updated disk. No bridge restart.
+- **GS client, fast path: `preview.py`.** It reproduces `claude.s`'s exact SHR pixel math at KEGS's real display geometry (640×200 stretched to 4:3 → pixels are ~0.42 wide : 1 tall). What the PNG shows is what KEGS shows. It writes a full screen and a zoomed `*_mascot.png`.
+- **GS client, full loop**: `./build.sh`, then **Ctrl-⌘-Reset** in KEGS (boots `~/Downloads/CLAUDE.dsk` via `~/config.kegs`). No bridge restart needed.
+- **8-bit client**: MAME, fully scripted. `mame apple2ee -sl2 ssc -sl2:ssc:rs232 null_modem -bitbanger socket.127.0.0.1:6502 -flop1 CLAUDE.dsk` wires an emulated Super Serial Card to the bridge's socket; `-autoboot_script` (Lua) types keys and takes snapshots, and Lua read/write taps on memory are how the hard bugs here were actually found. The IIc is `mame apple2c` with `-modem null_modem`. ROMs aren't distributable; the romset was assembled from Asimov parts + a keyboard ROM synthesized from MAME's own matrix source (see W-482 in Linear for the recipe).
 - **Bridge change** (`bridge/*.py`): restart the `python3 bridge.py` process.
-- **Real hardware** (Wells' IIgs: WiModem 232 Pro on the modem port, FloppyEmu as disk): two update paths. (a) SD card: `dd if=apple2gs/CLAUDE.dsk of=/Volumes/<CARD>/<existing>.dsk conv=notrunc` — MUST be an in-place overwrite of a file the Emu already loads; a fresh Finder copy can land on fragmented FAT space and the Emu refuses non-contiguous files ("file not contiguous"). (b) Serial, no card swap: run the bridge with `--bootstrap ../apple2gs/COBJ`, then on the IIgs `RUN LOADER` (listing in `apple2gs/BOOTSTRAP.bas.txt`). The loader auto-dials, receives, verifies a transmitted checksum, and BSAVEs — no build-specific constants on the IIgs side; the bridge re-reads COBJ on every transfer.
+- **Real hardware** (Wells: IIgs + IIc, WiModem 232 Pro, FloppyEmu): `tools/install-sd.sh` — in-place overwrite of the card's existing image (can't fragment). The tool is [wr/floppyemu-sd](https://github.com/wr/floppyemu-sd), vendored in `tools/`.
 
 ## Rendering pipeline (bridge → client)
 
@@ -56,15 +61,16 @@ python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
 
 ## In-band control scheme
 
-The reply stream carries a few control bytes the native client interprets (kept below `EOT`=`0x04`):
+The reply stream carries a few control bytes the native clients interpret (kept below `EOT`=`0x04`):
 
-- `0x01 <n>` — set text color: `1`=gray (reply/input), `2`=coral (mascot/titles/footer), `3`=white (your messages, inline code).
-- `0x02` — draw the white reply bullet.
-- `0x0E` — header frame follows (one CR-terminated line per header row); sent at boot and before each reply.
+- `0x01 <n>` — set text color: `1`=gray (reply/input), `2`=coral (mascot/titles/footer), `3`=white (your messages, inline code). The 8-bit client maps 3 → inverse video, others → normal.
+- `0x02` — draw the reply bullet.
+- `0x03` — session over (bridge-side `/quit`): the client returns to its menu.
+- `0x0E` — header frame follows (3 CR-terminated lines); sent in reply to the client's session-open CR probe and before each reply. An **unpaired** peer's probe is answered with a LOCKED header instead — that's how the pairing prompt reaches the screen (idle clients discard unsolicited text but always render headers).
 
-These are injected in `bridge.py:run_app_session` (bullet, footer) and inside `render.py` (inline/fenced `code` spans → white). `to_ascii` deliberately **passes through bytes 1–3** rather than dropping them; the client's `recv_reply`/`spinner` intercept them before `cout`. Color markers currently count toward wrap width, so code-dense lines may wrap a few columns early.
+These are injected in `bridge.py:run_app_session` (bullet, footer) and inside `render.py` (inline/fenced `code` spans → white). `to_ascii` deliberately **passes through bytes 1–3** rather than dropping them; the clients' `recv_reply`/`spinner` intercept them before `cout`. Color markers currently count toward wrap width, so code-dense lines may wrap a few columns early.
 
-## The splash pipeline
+## The splash pipeline (GS)
 
 `gen_assets.py` machine-ports `clawd.gif` into SHR frames at build time. Rules encoded there were each learned the hard way — violating them reintroduces fixed bugs:
 
@@ -72,16 +78,33 @@ These are injected in `bridge.py:run_app_session` (bullet, footer) and inside `r
 - Typing poses are substituted from the spritesheet by **best-match, anchored on coral body cells only** — first-match substitution and prop-anchoring both produced wrong frames. Never substitute the stand pose (it kills the intro/outro acting).
 - Gif colors are darker than sheet colors — the classifier's lum≥118 split is gif-tuned.
 - All gray cells are erased (anti-aliasing artifacts) and a rigid keyboard sprite is stamped instead: parked on the table during typing (`rest_x`, deliberately 1 column nearer Clawd), tilted in flight.
-- The session mascot is the original hand-drawn critter, **deliberately static** — Wells does not want it animated.
+- The inter-loop pause holds a dedicated frame (`SPLASH_HOLD`): the stand pose with the arms 1px taller.
+- The session mascot is the original hand-drawn critter, **deliberately static** — Wells does not want it animated. (The 8-bit *menu* mascot blinks; that's intentional.)
 
 ## Non-obvious constraints & gotchas
 
-- **640-mode palette is full at 4 colors** (black/gray/coral/white). A 5th color (e.g. a true lavender) is impossible without switching to 320 mode, which also halves to 40 columns. Text mode can't do multiple simultaneous colors at all — that's why this is a graphics client.
-- **Font must be a real bitmap** (`unscii-8.hex`, CC0, loaded verbatim in `gen_assets.py`). Rasterizing a TTF down to 8×8 produces unreadable mush — don't.
-- **Real hardware needs `scc_init`.** A real IIgs only hardware-resets the SCC at power-on — the modem port moves no bytes until a program sets clocks and enables Rx/Tx (Apple IIgs TN #018). `claude.s` does this itself at startup (9600 8N1; change `SCC_BAUD_TC` to 4 for 19200). KEGS works with or without it, so "works in KEGS" proves nothing about serial on real metal.
-- **The SCC Rx FIFO is 3 bytes — never go deaf to the port.** The client keeps a 256-byte ring buffer (`rb_poll`/`getbyte`/`havebyte` in claude.s): slow loops (`scroll_up`, `clear_rowA`, `vbl_edge`) drain the port mid-work, and every reader pulls buffered bytes first. Any new long-running loop MUST call `rb_poll` at least every couple of ms or real hardware drops bytes (symptom: mangled text; KEGS won't show it). `--pace-cps` is not needed for this client — only for the plain BASIC/terminal clients, which have no buffer.
-- **A real 8530 latches Rx overrun and can wedge the status poll** — an unbounded drain-until-empty loop then spins forever (overrun is *guaranteed* at boot: the modem's dial echo arrives while the client draws the mascot). `rb_poll` therefore bounds its drain (4 bytes max) and ends every pass with WR0 = $30 (Error Reset). Route ALL SCC reads through `rb_poll`/`getbyte`; never write a new raw `lda SCC_STAT` poll loop. KEGS models none of this — this class of bug only manifests on real metal. (Boot breadcrumbs remain in `start`: border flashes white→red→yellow→black through init stages; a stuck colored border names the hung stage.) The client auto-dials at startup — `modem_dial` sends `ATDS=0` **unconditionally** (a connected-probe can't work: in command mode the modem echoes the probe, indistinguishable from an answer); when already online the bridge recognizes `ATD…` lines and swallows them.
-- **65816 assembler mode tracking:** after `jsr`ing a routine that changes the M/X flag width (e.g. `put_common` returns in `.a8`), you MUST put a `.a8`/`.a16` directive after the call so operand widths assemble correctly. Getting this wrong silently emits an extra byte that executes as `BRK` (crash). `mvn` block-move also corrupts KEGS state — `scroll_up` uses a plain `[dp],y` copy instead.
-- **KEGS reads `~/config.kegs`** (home dir), not the one in the KEGS app folder — the app runs translocated under macOS quarantine so its CWD isn't the folder. The IIgs boots the DOS 3.3 disk from **slot 6** (`s6d1`); a leading `#` on the path means "ejected". `build.sh` writes to `~/Downloads/CLAUDE.dsk`, which the config points to — don't move that file.
-- **Client zero page must dodge live Applesoft/ProDOS state.** The user Ctrl-Resets from the running client back into BASIC (ProDOS BASIC.SYSTEM on the FloppyEmu disk) — any ZP the client scribbles on is corruption BASIC resumes with. Already learned the hard way: $B1-$C8 is CHRGET (executable code — trashing it breaks ALL of BASIC until reboot, symptom "everything is a syntax error"), $D6 is the auto-RUN lock, $D8 is ONERR. Known-safe homes: $06-$09, $FA-$FD. The disk's STARTUP has a press-a-key-for-BASIC window so LOADER updates always run on a fresh interpreter.
+The theme of this list: **KEGS and MAME forgive what real chips don't.** Every entry below was a working-in-emulation, broken-on-metal bug.
+
+Both clients:
+- **Never go deaf to the serial port.** The GS's SCC FIFO is 3 bytes; the 8-bit 6551 buffers ONE byte — at 9600 that's ~1ms of slack. Both clients keep a 256-byte ring buffer (`rb_poll`/`getbyte`/`havebyte`) and every loop that can run longer than ~600 cycles calls `rb_poll` inside it (scrolls, row clears, VBL waits, do_header's pad loop). Any new slow loop MUST do the same; the symptom of forgetting is dropped bytes on metal that emulators never show.
+- **Local `/quit` (and any client-side command) must be matched BEFORE transmitting** — a line sent with no carrier reaches the modem's command processor.
+- **Zero page must dodge live Applesoft/DOS state.** Users Ctrl-Reset from the client back into BASIC; any ZP the client scribbles is corruption BASIC resumes with. $B1-$C8 is CHRGET (executable code — trashing it = "everything is a syntax error"), $D6 auto-RUN, $D8 ONERR. Known-safe: $06-$09, $FA-$FE.
+
+GS client (`claude.s`):
+- **640-mode palette is full at 4 colors** (black/gray/coral/white). A 5th needs 320 mode, which halves to 40 columns.
+- **Real hardware needs `scc_init`** — a IIgs never initializes the SCC at power-on (Apple TN #018); KEGS works without it.
+- **A real 8530 latches Rx overrun and can wedge the status poll** — `rb_poll` bounds its drain (4 bytes) and ends every pass with WR0 = $30 (Error Reset). Never write a raw `lda SCC_STAT` loop. Boot breadcrumbs remain in `start`: border flashes white→red→yellow→black through init; a stuck color names the hung stage.
+- **The real Sound GLU raises a busy bit around DOC cycles and drops accesses made while it's set** — all DOC access goes through `glu_wait`+`doc_wr`. KEGS doesn't model it. Also: DOC register `$E1` (osc enable) = oscillator count × 2.
+- **65816 mode tracking**: after `jsr`ing a routine that changes M/X width, put `.a8`/`.a16` after the call or operands mis-assemble into a `BRK`. `mvn` also corrupts KEGS state — `scroll_up` uses a plain `[dp],y` copy.
+- The client auto-dials `ATDS=0` unconditionally (a connected-probe can't work — the modem echoes it); the bridge swallows `ATD…` lines, and the dial window classifies modem verdicts (CONNECT/ERROR/BUSY/NO x) while echoing responses on row 22.
+
+8-bit client (`claude2.s`):
+- **Don't use IRQ-driven serial.** The enhanced IIe/IIc ROM interrupt dispatcher doesn't follow the II+'s "A saved at $45" convention; a handler assuming it corrupts the ROM's banking restore (80STORE drops, even columns garble, eventual crash). The client is 100% polled.
+- **Inverse text with ALTCHARSET on**: screen codes $40-$5F are **MouseText**, not inverse uppercase — fold to $00-$1F. Without ALTCHARSET, $40-$7F flash.
+- **80-col writes**: even columns live in aux RAM via 80STORE+PAGE2 ($C001 + $C055/$C054); odd columns in main. An IIe without an aux card is probed (`aux_test`) and falls back to 40-col.
+- **Don't trust $C019**: the IIe's VBLBAR free-runs; the IIc's is interrupt plumbing that may sit still. The client probes it at boot and falls back to cycle-counted delays (scaled ×4 on the 4MHz IIc Plus via `$FBBF`).
+- 6551 TX polls TDRE with a timeout because new-production W65C51N chips never set the bit.
+
+Environment:
+- **KEGS reads `~/config.kegs`** (home dir, not the app folder — macOS translocation). `s6d1` points at `~/Downloads/CLAUDE.dsk`, which `build.sh` refreshes; a leading `#` on the path means "ejected".
 - **Slash commands**: `bridge.py:handle_command` handles `/new`/`/clear`, `/mode`, `/model` (remembered bridge-side and re-passed as `--model` — a passthrough `/model` wouldn't stick across the per-turn process boundary), `/help`, `/quit`. In code mode every other `/command` passes through to `claude -p`, which executes most of them natively (`/cost`, `/context`, `/compact`, skills); TUI-only ones answer "isn't available in this environment". In chat mode unknown commands are rejected (the Messages API has no commands).

@@ -89,58 +89,12 @@ def send_header(term, backend) -> None:
         term.write_line(line)
 
 
-def run_bootstrap(term: Terminal, path: str) -> None:
-    """Stream a raw binary into the IIgs's memory at $4000 over the serial link.
-
-    Protocol (peer is apple2gs/BOOTSTRAP.bas.txt):
-      IIgs -> bridge: CR            link probe; we answer 0x06 so the loader
-                                    knows it's connected and skips auto-dialing
-      IIgs -> bridge: 'R'           ready to receive
-      bridge -> IIgs: sum_lo sum_mid sum_hi len_lo len_hi, then the raw bytes
-    The 5-byte preamble carries the checksum and length, so the loader on the
-    IIgs never contains build-specific constants. The file is re-read on every
-    'R', so rebuilds are picked up without restarting the bridge."""
-    with open(path, "rb") as f:
-        data = f.read()
-    log("bootstrap: waiting for the loader's ready byte ('R') on the IIgs...")
-    while not term.closed:
-        b = term.ch.read_byte()
-        if b is None or b < 0:
-            continue
-        b &= 0x7F  # ignore stray bytes (modem CONNECT text, etc.)
-        if b == 0x0D:
-            term.ch.write(b"\x06")  # probe ack
-            continue
-        if b == ord("R"):
-            log(f"bootstrap: got ready - streaming {len(data)} bytes to $4000")
-            break
-    if term.closed:
-        return
-    total = sum(data)
-    preamble = bytes([total & 0xFF, (total >> 8) & 0xFF, (total >> 16) & 0xFF,
-                      len(data) & 0xFF, (len(data) >> 8) & 0xFF])
-    for byte in preamble + data:
-        term.ch.write(bytes([byte]))
-        time.sleep(0.002)  # ~400 B/s: the loader's ML receive loop keeps up with
-        # full 9600 easily; stay below wire rate so the WiModem's buffers never fill
-    log(f"bootstrap: sent {len(data)} bytes + checksum {total} - "
-        "the loader verifies and BSAVEs; RUN again to retry")
-
-
 def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
-    """Protocol for the native clients (apple2gs/claude.s, or the simpler
-    apple2/CLAUDE.APP.bas.txt): the bridge stays silent (no banner, no prompts,
-    no echo) and just relays the backend's reply, then sends EOT. The Apple II
-    app draws all the UI itself."""
+    """Protocol for the native clients (apple2gs/claude.s and
+    apple2/claude2.s): the bridge stays silent (no banner, no prompts, no
+    echo) and just relays the backend's reply, then sends EOT. The Apple II
+    client draws all the UI itself."""
     cols = args.cols
-    if getattr(args, "bootstrap", None):
-        # Install-only mode: serve the binary on every ready byte so the IIgs
-        # loader can retry with a plain RUN after a bad checksum. Nothing else
-        # is sent (no header/prime), so no stray bytes can pollute a retry.
-        # Restart without --bootstrap to serve the client for real.
-        while not term.closed:
-            run_bootstrap(term, args.bootstrap)
-        return
     if backend_err:
         term.write_line(f"[chat unavailable: {backend_err}]")
         term.write(EOT)
@@ -290,10 +244,7 @@ def require_pairing(term: Terminal, args) -> bool:
 
 
 def run_session(term: Terminal, args) -> None:
-    # --bootstrap serves a binary to the LOADER, which can't type a code;
-    # nothing sensitive is reachable on that path, so it stays open.
-    if args.pair_code and not getattr(args, "bootstrap", None) \
-            and not require_pairing(term, args):
+    if args.pair_code and not require_pairing(term, args):
         return
     cols = args.cols
     mode = args.backend
@@ -456,10 +407,7 @@ def parse_args(argv=None):
 
     p.add_argument("--app", action="store_true",
                    help="native-client protocol: no echo/banner/prompts, EOT after "
-                        "each reply (for apple2gs/claude.s or apple2/CLAUDE.APP.bas.txt)")
-    p.add_argument("--bootstrap", metavar="FILE",
-                   help="app mode: stream this raw binary to $4000 on the IIgs and "
-                        "run it (a diskless RAM-load), then serve it")
+                        "each reply (for the native clients on the boot disk)")
     p.add_argument("--backend", default="chat", choices=("chat", "code"))
     p.add_argument("--model", default="", help="override the Claude model id")
     p.add_argument("--effort", default="low",
@@ -487,7 +435,7 @@ def main(argv=None) -> int:
         newline="\r" if args.app else "\r\n",  # app uses bare CR
     )
 
-    if args.telnet and not args.no_pair and not args.bootstrap:
+    if args.telnet and not args.no_pair:
         if not args.pair_code:
             import secrets
             args.pair_code = f"{secrets.randbelow(10000):04d}"

@@ -4,16 +4,23 @@ A dumb terminal for Claude Code, on an Apple ][.
 
 ![The session screen: coral mascot, header, and a scrolling transcript in Super Hi-Res 640 mode](docs/session-preview.png)
 
-Your Apple IIgs boots a 140K floppy, dials a WiFi modem, and becomes a
+Your Apple ][ boots a 140K floppy, dials a WiFi modem, and becomes a
 terminal for the real `claude` CLI running on a modern machine. Claude reads
 files, edits them, runs commands — all driven from a 40-year-old keyboard,
-with the results streaming to a native Super Hi-Res client at 9600 baud:
-boot menu, animated mascot splash with chiptune (on the IIgs's Ensoniq
-wavetable synth), scrolling transcript, thinking spinner, scrollback.
+with the results streaming back at 9600 baud.
+
+One disk boots every Apple II. On a IIgs it launches a native Super Hi-Res
+client (boot menu, animated mascot splash with chiptune on the Ensoniq
+wavetable synth, scrolling transcript, thinking spinner, scrollback); on a
+IIe, IIc, IIc Plus, or even a II+, it launches a native text-mode client
+with the same menu, a blinking mascot in inverse video, and a beeper
+rendition of the theme. The boot program reads the machine's ROM ID and
+picks the right one.
 
 Every earlier AI-on-retro project we know of is a chat client. This is the
-real agentic tool — and the client is bare-metal 65816, not a terminal
-program: the Apple II draws all of the UI itself from a 7-bit ASCII protocol.
+real agentic tool — and the clients are bare-metal 65816 and 6502, not
+terminal programs: the Apple II draws all of the UI itself from a 7-bit
+ASCII protocol.
 
 No Apple II? It runs in the [KEGS](https://kegs.sourceforge.net/) emulator,
 and that's the fastest way to try it.
@@ -49,8 +56,8 @@ The shopping list:
 
 | Thing | Examples |
 |---|---|
-| Apple IIgs | any ROM 01/03 machine |
-| Hayes-compatible WiFi modem on the modem port | [WiModem 232 Pro](https://www.cbmstuff.com/), any ESP8266 Zimodem/RetroWiFi build (~$20–80) |
+| An Apple II | IIgs (the full graphics client), or IIe / IIc / IIc Plus / II+ (text client) |
+| A Hayes-compatible WiFi modem on the modem/serial port | [WiModem 232 Pro](https://www.cbmstuff.com/), any ESP8266 Zimodem/RetroWiFi build (~$20–80); IIe and II+ need a Super Serial Card in slot 2 |
 | A way to boot a 140K 5.25" image | [FloppyEmu](https://www.bigmessowires.com/floppy-emu/), or a real drive + [ADTPro](https://adtpro.com/) to write the floppy |
 
 One-time setup:
@@ -83,12 +90,8 @@ One-time setup:
 
 4. Power on. The modem's already dialing while the splash plays. **Connect.**
 
-Updating later: re-run `install-sd.sh` (in-place overwrite, can't fragment) —
-or skip the card entirely and update over the serial line with the ~40-line
-BASIC loader in [apple2gs/BOOTSTRAP.bas.txt](apple2gs/BOOTSTRAP.bas.txt):
-type it in once, then updates are `RUN LOADER` on the IIgs while the bridge
-runs `--bootstrap`. The loader verifies a checksum; nothing in it is tied to
-a build.
+Updating later: download the new release image and re-run `install-sd.sh` —
+an existing image on the card is overwritten in place, which can't fragment.
 
 ## Also works as a plain terminal
 
@@ -116,7 +119,7 @@ Users don't need this — the release disk is prebuilt. For hacking:
 point `DOS33FSPROGS` at it), Python 3 with Pillow.
 
 ```sh
-cd apple2gs && ./build.sh    # assets -> assemble -> link -> CLAUDE-ready disk
+cd apple2gs && ./build.sh    # builds BOTH clients into one CLAUDE.dsk
 python3 preview.py assets.inc out.png   # render the SHR screen, no emulator
 ```
 
@@ -124,8 +127,12 @@ Everything is generated from source at build time: the font from unscii-8
 (a real bitmap font — TTFs rasterized to 8×8 are mush), the entire splash
 animation machine-ported frame-by-frame from a gif, the music from note
 lists in `gen_assets.py`. The disk is a pristine DOS 3.3 System Master with
-the client injected — which is exactly why it boots emulators, FloppyEmu,
-and real drives alike.
+both clients injected and a machine-detecting HELLO — which is why one image
+boots emulators, FloppyEmu, real drives, and every machine in the family.
+
+The 8-bit client has its own test harness: MAME with an emulated Super
+Serial Card mapped to a TCP socket, driven by Lua-scripted keystrokes, so
+the whole boot → dial → session → reply loop runs unattended.
 
 ## How it works, and what bit us
 
@@ -133,8 +140,9 @@ The bridge reads a CR-terminated line, runs a turn of `claude -p
 --output-format stream-json`, flattens the reply to word-wrapped 7-bit
 ASCII, and streams it back with a tiny in-band vocabulary (`0x01 n` color,
 `0x02` bullet, `0x0E` header, `0x03` session-over, `0x04` end-of-reply).
-The client keeps a ring buffer serviced from every loop so the 3-byte SCC
-FIFO never overflows at 9600 baud.
+Both clients keep a ring buffer serviced from every loop, because the
+serial chips buffer almost nothing at 9600 baud (3 bytes on the IIgs's SCC,
+ONE byte on the 8-bit machines' 6551).
 
 The parts that only exist because real hardware is real:
 - A IIgs never initializes its serial chip at power-on — the port is dead
@@ -142,10 +150,14 @@ The parts that only exist because real hardware is real:
   nothing.
 - A real Zilog 8530 latches Rx-overrun errors and can wedge a naive status
   poll; every read goes through a bounded drain with an error reset.
+- The enhanced IIe's ROM interrupt dispatcher silently breaks handlers
+  written for the II+'s conventions — so the 8-bit client polls instead.
+- With the IIe's alternate character set on, screen codes $40-$5F aren't
+  inverse uppercase, they're MouseText. Inverse text needs a fold.
 - FloppyEmu's "file not contiguous" turned out to be macOS's first-fit FAT
   allocator shredding fresh copies onto fragmented cards — diagnosed by
-  [parsing the FAT raw](tools/fatmap.py), fixed by
-  [the installer](tools/install-sd.sh).
+  parsing the FAT raw, fixed by the installer. That grew into its own tool:
+  [wr/floppyemu-sd](https://github.com/wr/floppyemu-sd).
 
 More in [CLAUDE.md](CLAUDE.md), which doubles as the contributor gotcha list.
 
