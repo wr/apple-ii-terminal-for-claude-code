@@ -20,3 +20,8 @@ apple2/claude2.map
 apple2gs/cfg/
 apple2gs/nvram/
 apple2gs/snap/
+
+# MAME droppings from running the test harness at the repo root
+cfg/
+nvram/
+snap/
