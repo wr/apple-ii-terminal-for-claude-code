@@ -108,17 +108,16 @@ def print_banner(args, transport) -> None:
 
     if args.telnet:
         ip = _lan_ip()
-        addr = f"{ip}:{args.port}" if ip else f"this machine, port {args.port}"
-        row("Your Apple II dials:", f"{GRAY}Your Apple II dials:{OFF}")
-        row(addr, f"{BOLD}{addr}{OFF}")
-        if ip:
-            row()
+        if ip:  # the address lives in the command - no need to say it twice
             row("one-time modem setup:",
                 f"{GRAY}one-time modem setup:{OFF}")
             # one per line: &Z0= swallows the rest of its line, so
             # suggesting them side by side would store garbage
-            row(f"AT&Z0={addr}")
-            row("AT&W")
+            row(f"AT&Z0={ip}:{args.port}",
+                f"{BOLD}AT&Z0={ip}:{args.port}{OFF}")
+            row("AT&W", f"{BOLD}AT&W{OFF}")
+        else:
+            row(f"listening on port {args.port}")
     else:
         row(transport.describe())
     if args.pair_code:
@@ -128,18 +127,18 @@ def print_banner(args, transport) -> None:
 
     title = " Terminal for Claude Code "
     ver = " v0.2.0 "
-    inner = max([len(p) for p, _ in rows] + [len(title) + 2]) + 4
+    inner = max([len(p) + 4 for p, _ in rows] + [38])  # box is 40 wide
     print()
-    print(f" {CORAL}╭─{BOLD}{title}{OFF}{CORAL}"
+    print(f"{CORAL}╭─{BOLD}{title}{OFF}{CORAL}"
           + "─" * (inner - len(title) - 1) + f"╮{OFF}")
-    print(f" {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
+    print(f"{CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
     for plain, styled in rows:
         pad = " " * (inner - len(plain) - 2)
-        print(f" {CORAL}│{OFF}  {styled}{pad}{CORAL}│{OFF}")
-    print(f" {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
-    print(f" {CORAL}╰" + "─" * (inner - len(ver) - 2)
+        print(f"{CORAL}│{OFF}  {styled}{pad}{CORAL}│{OFF}")
+    print(f"{CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
+    print(f"{CORAL}╰" + "─" * (inner - len(ver) - 2)
           + f"{OFF}{GRAY}{ver}{OFF}{CORAL}──╯{OFF}")
-    print(f" {GRAY}Ctrl-C to stop{OFF}")
+    print(f"{GRAY}Ctrl-C to stop{OFF}")
     print()
 
 
