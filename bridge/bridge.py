@@ -113,8 +113,8 @@ def print_banner(args, transport) -> None:
         row(addr, f"{BOLD}{addr}{OFF}")
         if ip:
             row()
-            row("one-time modem setup (2 commands):",
-                f"{GRAY}one-time modem setup (2 commands):{OFF}")
+            row("one-time modem setup:",
+                f"{GRAY}one-time modem setup:{OFF}")
             # one per line: &Z0= swallows the rest of its line, so
             # suggesting them side by side would store garbage
             row(f"AT&Z0={addr}")
