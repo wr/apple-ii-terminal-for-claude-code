@@ -73,8 +73,8 @@ class SerialTransport:
         self.xonxoff = xonxoff
 
     def describe(self) -> str:
-        flow = "RTS/CTS" if self.rtscts else ("XON/XOFF" if self.xonxoff else "none")
-        return f"serial {self.port} @ {self.baud} 8N1, flow={flow}"
+        flow = " RTS/CTS" if self.rtscts else (" XON/XOFF" if self.xonxoff else "")
+        return f"serial {self.port} @ {self.baud}{flow}"
 
     def channels(self) -> Iterator[Channel]:
         import serial  # imported lazily so TCP-only users don't need pyserial
@@ -143,7 +143,7 @@ class TCPTransport:
 
     def describe(self) -> str:
         shown = self.host or "0.0.0.0"
-        return f"tcp/telnet listening on {shown}:{self.port}"
+        return f"telnet {shown}:{self.port}"
 
     def channels(self) -> Iterator[Channel]:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -169,7 +169,7 @@ class TCPClientTransport:
         self.port = port
 
     def describe(self) -> str:
-        return f"tcp client -> {self.host}:{self.port}"
+        return f"connect -> {self.host}:{self.port}"
 
     def channels(self) -> Iterator[Channel]:
         waiting = False

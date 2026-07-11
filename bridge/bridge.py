@@ -55,19 +55,19 @@ HELP = [
 ]
 
 
-# The host console doubles as a live transcript: plumbing is dim, the
-# user's lines are bold, replies are mirrored dim as they're sent. Colors
-# vanish when stdout isn't a terminal (piped/logged).
+# The host console doubles as a live transcript: plumbing is gray, the
+# user's lines are bold, replies are mirrored gray as they're sent. Colors
+# vanish when stdout isn't a terminal (piped/logged). Gray is a real
+# mid-gray (256-color 245), not SGR dim - dim is unreadable on many themes.
 _TTY = sys.stdout.isatty()
-DIM = "\x1b[2m" if _TTY else ""
+GRAY = "\x1b[38;5;245m" if _TTY else ""
 BOLD = "\x1b[1m" if _TTY else ""
 CORAL = "\x1b[38;5;209m" if _TTY else ""
-REV = "\x1b[7m" if _TTY else ""
 OFF = "\x1b[0m" if _TTY else ""
 
 def log(msg: str) -> None:
     """Plumbing chatter on the host console (never sent to the Apple II)."""
-    print(f"{DIM}{time.strftime('%H:%M:%S')} · {msg}{OFF}", flush=True)
+    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {msg}{OFF}", flush=True)
 
 
 def show_user(text: str) -> None:
@@ -78,7 +78,7 @@ def show_user(text: str) -> None:
 def show_reply(lines: list, secs: float, mode: str) -> None:
     """Mirror the reply the Apple II just received."""
     for line in lines:
-        print(f"{DIM}  {line}{OFF}")
+        print(f"{GRAY}  {line}{OFF}")
     print(f"{CORAL}· {mode} replied in {secs:.1f}s "
           f"({len(lines)} lines){OFF}", flush=True)
 
@@ -99,48 +99,53 @@ def _lan_ip():
 def print_banner(args, transport) -> None:
     """The Claude Code welcome box, bridge edition: rounded border, the
     title in the top rule, coral accents. Content is (plain, styled)
-    pairs so padding is computed on visible length."""
-    proto = "native-client protocol" if args.app else "plain-terminal mode"
+    pairs so padding is computed on visible length; every stock line is
+    budgeted to keep the whole box inside 40 columns."""
+    proto = "app protocol" if args.app else "plain terminal"
     rows: list = []
 
-    def row(plain: str, styled: str | None = None) -> None:
-        rows.append((plain, styled if styled is not None else plain))
+    def row(plain: str = "", styled: str | None = None,
+            center: bool = False) -> None:
+        rows.append((plain, plain if styled is None else styled, center))
 
     row(transport.describe())
-    row(f"{args.cols} cols · {args.backend} backend · {proto}",
-        f"{DIM}{args.cols} cols · {args.backend} backend · {proto}{OFF}")
+    cfg = f"{args.cols} cols · {args.backend} · {proto}"
+    row(cfg, f"{GRAY}{cfg}{OFF}")
     if args.telnet:
         ip = _lan_ip()
         if ip:  # the line the modem needs, ready to copy
-            setup = f"AT&Z0={ip}:{args.port}  AT&W"
-            row("")
-            row(f"modem setup:  {setup}",
-                f"{DIM}modem setup:{OFF}  {BOLD}{setup}{OFF}")
+            row()
+            row("store the bridge in the modem:",
+                f"{GRAY}store the bridge in the modem:{OFF}")
+            row(f"AT&Z0={ip}:{args.port}  AT&W")
     if args.pair_code:
-        code = " ".join(args.pair_code)
-        bar = f"  PAIRING CODE   {code}  "
-        note = "type it on the Apple II once · --no-pair skips"
+        code = "  ".join(args.pair_code)
+        row()
+        row("PAIRING CODE", f"{GRAY}PAIRING CODE{OFF}", center=True)
+        row(code, f"{BOLD}{CORAL}{code}{OFF}", center=True)
+        row()
+        note = "type it once on the Apple II"
+        row(note, f"{GRAY}{note}{OFF}")
         if _paired_peers:
-            note += f" · {len(_paired_peers)} already paired"
-        row("")
-        row(bar, f"{REV}{CORAL}{BOLD}{bar}{OFF}")
-        row(note, f"{DIM}{note}{OFF}")
+            n = len(_paired_peers)
+            paired = f"{n} device{'s' if n != 1 else ''} already paired"
+            row(paired, f"{GRAY}{paired}{OFF}")
 
     title = " Terminal for Claude Code "
-    ver = "bridge v0.2.0 "
-    inner = max(len(p) for p, _ in rows) + 4
-    inner = max(inner, len(title) + len(ver) + 6)
+    ver = " v0.2.0 "
+    inner = max([len(p) for p, _, _ in rows] + [len(title) + 2]) + 4
     print()
-    print(f"  {CORAL}╭─{BOLD}{title}{OFF}{CORAL}"
-          + "─" * (inner - len(title) - len(ver) - 3)
-          + f" {OFF}{DIM}{ver}{OFF}{CORAL}╮{OFF}")
-    print(f"  {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
-    for plain, styled in rows:
-        pad = " " * (inner - 4 - len(plain))
-        print(f"  {CORAL}│{OFF}  {styled}{pad}  {CORAL}│{OFF}")
-    print(f"  {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
-    print(f"  {CORAL}╰" + "─" * inner + f"╯{OFF}")
-    print(f"  {DIM}Ctrl-C to stop{OFF}")
+    print(f" {CORAL}╭─{BOLD}{title}{OFF}{CORAL}"
+          + "─" * (inner - len(title) - 1) + f"╮{OFF}")
+    print(f" {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
+    for plain, styled, center in rows:
+        lpad = (inner - len(plain)) // 2 if center else 2
+        rpad = inner - len(plain) - lpad
+        print(f" {CORAL}│{OFF}{' ' * lpad}{styled}{' ' * rpad}{CORAL}│{OFF}")
+    print(f" {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
+    print(f" {CORAL}╰" + "─" * (inner - len(ver) - 2)
+          + f"{OFF}{GRAY}{ver}{OFF}{CORAL}──╯{OFF}")
+    print(f" {GRAY}Ctrl-C to stop{OFF}")
     print()
 
 
