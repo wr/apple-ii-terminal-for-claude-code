@@ -83,22 +83,63 @@ def show_reply(lines: list, secs: float, mode: str) -> None:
           f"({len(lines)} lines){OFF}", flush=True)
 
 
+def _lan_ip():
+    """This host's LAN address - the IP the WiFi modem must dial."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # routing lookup only; nothing is sent
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
 def print_banner(args, transport) -> None:
+    """The Claude Code welcome box, bridge edition: rounded border, the
+    title in the top rule, coral accents. Content is (plain, styled)
+    pairs so padding is computed on visible length."""
     proto = "native-client protocol" if args.app else "plain-terminal mode"
-    print()
-    print(f"  {BOLD}Terminal for Claude Code{OFF}  {DIM}bridge v0.2.0{OFF}")
-    print(f"  {DIM}{transport.describe()} · {args.cols} cols · "
-          f"{args.backend} backend · {proto}{OFF}")
+    rows: list = []
+
+    def row(plain: str, styled: str | None = None) -> None:
+        rows.append((plain, styled if styled is not None else plain))
+
+    row(transport.describe())
+    row(f"{args.cols} cols · {args.backend} backend · {proto}",
+        f"{DIM}{args.cols} cols · {args.backend} backend · {proto}{OFF}")
+    if args.telnet:
+        ip = _lan_ip()
+        if ip:  # the line the modem needs, ready to copy
+            setup = f"AT&Z0={ip}:{args.port}  AT&W"
+            row("")
+            row(f"modem setup:  {setup}",
+                f"{DIM}modem setup:{OFF}  {BOLD}{setup}{OFF}")
     if args.pair_code:
-        # the one thing a first-time user must not miss
         code = " ".join(args.pair_code)
-        print()
-        print(f"  {REV}{CORAL}{BOLD}  PAIRING CODE   {code}  {OFF}")
+        bar = f"  PAIRING CODE   {code}  "
         note = "type it on the Apple II once · --no-pair skips"
         if _paired_peers:
-            note += f" · {len(_paired_peers)} device(s) already paired"
-        print(f"  {DIM}{note}{OFF}")
+            note += f" · {len(_paired_peers)} already paired"
+        row("")
+        row(bar, f"{REV}{CORAL}{BOLD}{bar}{OFF}")
+        row(note, f"{DIM}{note}{OFF}")
+
+    title = " Terminal for Claude Code "
+    ver = "bridge v0.2.0 "
+    inner = max(len(p) for p, _ in rows) + 4
+    inner = max(inner, len(title) + len(ver) + 6)
     print()
+    print(f"  {CORAL}╭─{BOLD}{title}{OFF}{CORAL}"
+          + "─" * (inner - len(title) - len(ver) - 3)
+          + f" {OFF}{DIM}{ver}{OFF}{CORAL}╮{OFF}")
+    print(f"  {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
+    for plain, styled in rows:
+        pad = " " * (inner - 4 - len(plain))
+        print(f"  {CORAL}│{OFF}  {styled}{pad}  {CORAL}│{OFF}")
+    print(f"  {CORAL}│{OFF}" + " " * inner + f"{CORAL}│{OFF}")
+    print(f"  {CORAL}╰" + "─" * inner + f"╯{OFF}")
     print(f"  {DIM}Ctrl-C to stop{OFF}")
     print()
 
