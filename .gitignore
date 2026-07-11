@@ -17,3 +17,5 @@ apple2/COBJ8
 apple2gs/COBJ8
 apple2/claude2.lbl
 apple2/claude2.map
+apple2gs/cfg/
+apple2gs/nvram/
