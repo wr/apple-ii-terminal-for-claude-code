@@ -60,7 +60,7 @@ The shopping list:
 | Thing | Examples |
 |---|---|
 | An Apple II | IIgs (the full graphics client), or IIe / IIc / IIc Plus / II+ (text client) |
-| A Hayes-compatible WiFi modem on the modem/serial port | [WiModem 232 Pro](https://www.cbmstuff.com/), any ESP8266 Zimodem/RetroWiFi build (~$20–80); IIe and II+ need a Super Serial Card in slot 2 |
+| A Hayes-compatible WiFi modem on the modem/serial port | [WiModem 232 Pro](https://www.cbmstuff.com/) is what we run and auto-dials out of the box; WiFi232 and ESP8266 Zimodem/RetroWiFi builds (~$20–80) work with one manual step ([why](docs/MODEM-SETUP.md)). IIe and II+ need a Super Serial Card in slot 2 |
 | A way to boot a 140K 5.25" image | [FloppyEmu](https://www.bigmessowires.com/floppy-emu/), or a real drive + [ADTPro](https://adtpro.com/) to write the floppy |
 
 One-time setup:
@@ -83,7 +83,9 @@ One-time setup:
    ```
 
    **Connect** on the boot menu dials entry 0. The boot menu also has a live
-   Hayes AT console for whatever your modem needs.
+   Hayes AT console for whatever your modem needs. Cables, per-device
+   commands (a fresh WiModem ships at 300 baud and needs `AT*B9600` once),
+   and a "modem plays dead" checklist: [docs/MODEM-SETUP.md](docs/MODEM-SETUP.md).
 
 3. **Disk**: copy `CLAUDE.dsk` to the FloppyEmu SD card (5.25" mode, boots
    from slot 6). On a Mac, `tools/install-sd.sh` does it safely — FloppyEmu

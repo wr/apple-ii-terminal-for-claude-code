@@ -105,6 +105,10 @@ The IIc has no slots, so it's serial or nothing — which is perfect here.
 
 ## WiFi modem / telnet (IIgs)
 
+Modem-side setup — cables per machine, WiFi join and phone-book commands for
+WiModem 232 / WiFi232 / Zimodem, and a troubleshooting checklist — lives in
+[docs/MODEM-SETUP.md](../docs/MODEM-SETUP.md).
+
 If you have an ESP-based WiFi modem (Zimodem/RetroWiFi style) or an Uthernet II:
 
 1. Run the bridge as a TCP server on your host:
