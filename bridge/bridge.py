@@ -161,6 +161,21 @@ def make_backend(mode: str, cols: int, args) -> object:
 
 EOT = b"\x04"  # app mode: marks end of a reply so the client stops its spinner
 
+# Lines a WiFi modem volunteers ON THE WIRE around a (re)connect - the
+# WiModem announces "reconnected" into the session itself. Anything here,
+# arriving before the user has typed a single real line, is the modem
+# talking, not the human; forwarding it would burn a Claude turn.
+_MODEM_CHATTER = ("RECONNECTED", "RING", "NO CARRIER", "NO ANSWER",
+                  "NO DIALTONE", "BUSY", "ERROR")
+
+
+def is_modem_chatter(line: str) -> bool:
+    u = line.upper()
+    if u in _MODEM_CHATTER or u == "CONNECT":
+        return True
+    # "CONNECT 2400" yes; "connect to the db" is a person talking
+    return u.startswith("CONNECT ") and u[8:].strip().isdigit()
+
 
 def send_header(term, backend) -> None:
     """Push the client's header frame: 0x0E then one CR-terminated line each."""
@@ -185,6 +200,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
     if backend:  # learn the model/cwd/version, then show the header at boot
         backend.prime()
         send_header(term, backend)
+    fresh = True  # no real user input yet: modem chatter is still expected
     while not term.closed:
         user = term.read_line()  # no prompt, echo off - the app echoes locally
         if user is None:
@@ -201,6 +217,10 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
                 send_header(term, backend)
             term.write(EOT)
             continue
+        if fresh and is_modem_chatter(user):
+            log(f"modem chatter ignored: {user!r}")
+            continue
+        fresh = False
         show_user(peer, user)
         if user.startswith("/"):
             keep = handle_command(user, term, args, backend, mode)
@@ -297,6 +317,9 @@ def require_pairing(term: Terminal, args) -> bool:
         line = line.strip()
         if line.upper().startswith("ATD"):
             continue  # the client's auto-dial isn't a guess
+        if is_modem_chatter(line):
+            log(f"pairing: modem chatter ignored: {line!r}")
+            continue  # ...and neither is the modem's own announcement
         if not line:
             # the client's session-open CR probe: answer with the lock
             # notice as a header frame - an idle client renders headers,
@@ -348,6 +371,7 @@ def run_session(term: Terminal, args) -> None:
         term.write_line("Try /mode code, or set ANTHROPIC_API_KEY and reconnect.")
         term.write_line("")
 
+    fresh = True  # no real user input yet: modem chatter is still expected
     while not term.closed:
         user = term.read_line(prompt="\r\nYou> ")
         if user is None:
@@ -356,6 +380,10 @@ def run_session(term: Terminal, args) -> None:
         user = user.strip()
         if not user or user == "\x03":
             continue
+        if fresh and is_modem_chatter(user):
+            log(f"modem chatter ignored: {user!r}")
+            continue
+        fresh = False
         show_user(getattr(term.ch, "peer", None), user)
 
         if user.startswith("/"):
