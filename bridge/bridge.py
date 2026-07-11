@@ -72,13 +72,13 @@ def log(msg: str) -> None:
 
 def show_user(peer, text: str) -> None:
     """Mirror a line the Apple II user typed."""
-    print(f"{GRAY}{time.strftime('%H:%M:%S')} {peer or 'client'}{OFF} "
+    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {peer or 'client'}{OFF} "
           f"{BOLD}> {text}{OFF}", flush=True)
 
 
 def show_reply(peer, secs: float, nlines: int, mode: str) -> None:
     """Note that a reply went out - metadata only, not the text."""
-    print(f"{GRAY}{time.strftime('%H:%M:%S')} {peer or 'client'}{OFF} "
+    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {peer or 'client'}{OFF} "
           f"{CORAL}< {mode} reply sent · {secs:.1f}s · {nlines} lines{OFF}",
           flush=True)
 
@@ -563,9 +563,9 @@ def main(argv=None) -> int:
 
     try:
         for channel in transport.channels():
-            peer = getattr(channel, "peer", None)
-            note = f"connected ({peer})" if peer else "connected"
-            if args.pair_code and peer:
+            peer = getattr(channel, "peer", None) or "client"
+            note = f"{peer} connected"
+            if args.pair_code:
                 note += (" · known device" if peer in _paired_peers
                          else " · NEW device - will ask for the pairing code")
             log(note)
@@ -575,7 +575,7 @@ def main(argv=None) -> int:
                 run_session(term, args)
             finally:
                 channel.close()
-                log(f"disconnected after {time.monotonic() - t0:.0f}s")
+                log(f"{peer} disconnected after {time.monotonic() - t0:.0f}s")
     except KeyboardInterrupt:
         print()
         log("shutting down")
