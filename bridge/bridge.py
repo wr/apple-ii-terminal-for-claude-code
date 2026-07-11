@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-bridge - talk to Claude from a real Apple IIgs or IIc.
+"""The host half of Terminal for Claude Code (Apple II).
 
 The Apple II is a dumb terminal. This program sits on a modern host, reads the
 line you type, sends it to Claude, and streams the reply back word-wrapped for a
@@ -34,7 +34,8 @@ from transports import SerialTransport, TCPTransport, TCPClientTransport
 
 BANNER = [
     "===================================",
-    "  CLAUDE ][  -  Apple II <-> Claude",
+    "  TERMINAL FOR CLAUDE CODE",
+    "  on the Apple ][",
     "===================================",
     "Type /help for commands.",
     "",
@@ -54,9 +55,65 @@ HELP = [
 ]
 
 
+# The host console doubles as a live transcript: plumbing is dim, the
+# user's lines are bold, replies are mirrored dim as they're sent. Colors
+# vanish when stdout isn't a terminal (piped/logged).
+_TTY = sys.stdout.isatty()
+DIM = "\x1b[2m" if _TTY else ""
+BOLD = "\x1b[1m" if _TTY else ""
+CORAL = "\x1b[38;5;209m" if _TTY else ""
+OFF = "\x1b[0m" if _TTY else ""
+
+# the session-screen mascot (mascot_art in apple2/claude2.s), one X = 2 cols
+CRAB = [
+    "  XXXXXXXXXXXX  ",
+    "  XX XXXXXX XX  ",
+    "XXXXXXXXXXXXXXXX",
+    "  XXXXXXXXXXXX  ",
+    "   X X    X X   ",
+]
+
+
 def log(msg: str) -> None:
-    """Print to the bridge's own console (the host Terminal), not the Apple II."""
-    print(f"[bridge] {msg}", flush=True)
+    """Plumbing chatter on the host console (never sent to the Apple II)."""
+    print(f"{DIM}{time.strftime('%H:%M:%S')} · {msg}{OFF}", flush=True)
+
+
+def show_user(text: str) -> None:
+    """Mirror a line the Apple II user typed."""
+    print(f"{time.strftime('%H:%M:%S')} {BOLD}> {text}{OFF}", flush=True)
+
+
+def show_reply(lines: list, secs: float, mode: str) -> None:
+    """Mirror the reply the Apple II just received."""
+    for line in lines:
+        print(f"{DIM}  {line}{OFF}")
+    print(f"{CORAL}· {mode} replied in {secs:.1f}s "
+          f"({len(lines)} lines){OFF}", flush=True)
+
+
+def print_banner(args, transport) -> None:
+    proto = "native-client protocol" if args.app else "plain-terminal mode"
+    info = [
+        f"{BOLD}Terminal for Claude Code{OFF}  {DIM}bridge v0.2.0{OFF}",
+        f"{DIM}{transport.describe()}{OFF}",
+        f"{DIM}{args.cols} cols · {args.backend} backend · {proto}{OFF}",
+    ]
+    if args.pair_code:
+        info.append(f"PAIRING CODE: {BOLD}{args.pair_code}{OFF}  "
+                    f"{DIM}(type it on the Apple II once; --no-pair skips){OFF}")
+        if _paired_peers:
+            info.append(f"{DIM}{len(_paired_peers)} device(s) already paired "
+                        f"({_pairing_store()}){OFF}")
+    info.append(f"{DIM}Ctrl-C to stop{OFF}")
+    print()
+    for i in range(max(len(CRAB), len(info))):
+        art = ""
+        if i < len(CRAB):
+            art = "".join("██" if c == "X" else "  " for c in CRAB[i])
+        text = info[i] if i < len(info) else ""
+        print(f"  {CORAL}{art:<32}{OFF}  {text}".rstrip())
+    print()
 
 
 def make_backend(mode: str, cols: int, args) -> object:
@@ -107,7 +164,6 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
             log("channel closed by peer")
             return
         user = user.strip()
-        log(f"recv: {user!r}")
         if user.upper().startswith("ATD"):
             # the client dials unconditionally at startup; when the modem was
             # already online the dial string comes through to us - swallow it
@@ -118,6 +174,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
                 send_header(term, backend)
             term.write(EOT)
             continue
+        show_user(user)
         if user.startswith("/"):
             keep = handle_command(user, term, args, backend, mode)
             if keep is False:
@@ -140,9 +197,8 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
         # cells of bullet/indent in front of every line.
         fmt = StreamFormatter(cols - 2)
         lines: list[str] = []
-        n = 0
+        t0 = time.monotonic()
         for chunk in backend.stream(user):
-            n += 1
             lines.extend(fmt.feed(chunk))
             if term.closed:
                 return
@@ -159,7 +215,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
             term.write(b"\x01\x01")      # gray (reply may have ended mid-color)
             term.write_line("* " + foot)
         term.write(EOT)
-        log(f"reply done ({n} chunks from {mode})")
+        show_reply(lines, time.monotonic() - t0, mode)
 
 
 def _pairing_store() -> str:
@@ -271,9 +327,9 @@ def run_session(term: Terminal, args) -> None:
             log("channel closed by peer")
             return  # channel closed
         user = user.strip()
-        log(f"recv: {user!r}")
         if not user or user == "\x03":
             continue
+        show_user(user)
 
         if user.startswith("/"):
             keep = handle_command(user, term, args, backend, mode)
@@ -291,16 +347,18 @@ def run_session(term: Terminal, args) -> None:
         term.write_line("")
         term.write_line(f"Claude ({mode})>")
         fmt = StreamFormatter(cols)
-        nchunks = 0
+        mirror: list[str] = []
+        t0 = time.monotonic()
         for chunk in backend.stream(user):
-            nchunks += 1
             for out_line in fmt.feed(chunk):
                 term.write_line(out_line)
+                mirror.append(out_line)
             if term.closed:
                 return
         for out_line in fmt.flush():
             term.write_line(out_line)
-        log(f"reply done ({nchunks} chunks from {mode})")
+            mirror.append(out_line)
+        show_reply(mirror, time.monotonic() - t0, mode)
 
 
 def handle_command(cmd: str, term: Terminal, args, backend, mode):
@@ -373,7 +431,8 @@ def build_transport(args):
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Apple II <-> Claude bridge")
+    p = argparse.ArgumentParser(
+        description="Terminal for Claude Code - the host bridge")
 
     tr = p.add_mutually_exclusive_group()
     tr.add_argument("--serial", metavar="PORT",
@@ -400,8 +459,8 @@ def parse_args(argv=None):
     p.add_argument("--cols", type=int, default=80, choices=(40, 80),
                    help="screen width (default 80)")
     p.add_argument("--pace-cps", type=int, default=0,
-                   help="cap output chars/sec (0=off); needed for the plain BASIC/"
-                        "terminal clients only - the IIgs client has a ring buffer")
+                   help="cap output chars/sec (0=off); for plain terminal programs "
+                        "without flow control - the native clients don't need it")
     p.add_argument("--no-echo", action="store_true",
                    help="don't echo typed chars (turn ON local echo on the II)")
 
@@ -442,40 +501,24 @@ def main(argv=None) -> int:
     elif not args.pair_code:
         args.pair_code = ""
 
-    print(r"""
-  ___ _              _       ___         _
- / __| |__ _ _  _ __| |___  / __|___  __| |___
-| (__| / _` | || / _` / -_)| (__/ _ \/ _` / -_)
- \___|_\__,_|\_,_\__,_\___| \___\___/\__,_\___|
-        _____              _           _
-       |_   _|__ _ _ _ __ (_)_ _  __ _| |
-         | |/ -_) '_| '  \| | ' \/ _` | |
-         |_|\___|_| |_|_|_|_|_||_\__,_|_|
-                          for the Apple ][
-""")
-    print(f"[bridge] {transport.describe()}")
-    print(f"[bridge] {args.cols} cols, backend={args.backend}"
-          f"{', app protocol' if args.app else ''}. Ctrl-C to stop.")
-    if args.pair_code:
-        print(f"[bridge] PAIRING CODE: {args.pair_code}  "
-              "(type it on the Apple II once; --no-pair to disable)")
-        if _paired_peers:
-            print(f"[bridge] {len(_paired_peers)} device(s) already paired "
-                  f"(remembered in {_pairing_store()})")
+    print_banner(args, transport)
     if args.telnet:
-        print("[bridge] waiting for the Apple II to connect...")
+        log("waiting for the Apple II to connect...")
 
     try:
         for channel in transport.channels():
-            print("[bridge] connected")
+            peer = getattr(channel, "peer", None)
+            log(f"connected ({peer})" if peer else "connected")
+            t0 = time.monotonic()
             term = Terminal(channel, cfg)
             try:
                 run_session(term, args)
             finally:
                 channel.close()
-                print("[bridge] disconnected")
+                log(f"disconnected after {time.monotonic() - t0:.0f}s")
     except KeyboardInterrupt:
-        print("\n[bridge] shutting down")
+        print()
+        log("shutting down")
     return 0
 
 
