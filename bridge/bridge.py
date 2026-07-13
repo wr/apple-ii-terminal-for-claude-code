@@ -180,6 +180,7 @@ def make_backend(mode: str, cols: int, args) -> object:
 
 
 EOT = b"\x04"  # app mode: marks end of a reply so the client stops its spinner
+CMD_TOKEN = b"\x05"  # app mode: bridge issues a device token; client stores it
 
 # Lines a WiFi modem volunteers ON THE WIRE around a (re)connect - the
 # WiModem announces "reconnected" into the session itself. Anything here,
@@ -473,8 +474,6 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
     """Gate a listening bridge behind the manager's code. Returns False if the
     caller hung up, was locked out, or the pairing window had already closed."""
     peer = getattr(term.ch, "peer", None)
-    if pm.is_paired(peer):
-        return True
     if not pm.window_open():
         log(f"pairing: window closed; refusing new device {peer}")
         if args.app:
@@ -511,6 +510,13 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                                     "(it's on the bridge console)"))
                 prompted = True
             continue
+        if pm.check_token(line):  # a client auto-presenting its stored token
+            log(f"pairing: {peer} paired via token")
+            if args.app:
+                term.write(EOT)
+            else:
+                term.write_line("Paired - go ahead.")
+            return True
         if pm.exhausted(peer):
             log(f"pairing: {peer} hit the guess cap - locked out")
             term.write_line("Too many wrong codes. Restart the bridge to retry.")
@@ -518,10 +524,14 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                 term.write(EOT)
             return False
         if pm.check(peer, line.upper()):  # code alphabet is uppercase-only
-            log(f"pairing: {peer} paired (remembered)")
-            term.write_line("Paired - go ahead.")
             if args.app:
-                term.write(EOT)  # the client waits on end-of-reply
+                tok = pm.issue_token(peer)
+                term.write(CMD_TOKEN + tok.encode("ascii") + b"\r")
+                log(f"pairing: {peer} paired; issued token")
+                term.write(EOT)
+            else:
+                log(f"pairing: {peer} paired via code")
+                term.write_line("Paired - go ahead.")
             return True
         wait = pm.record_failure(peer)
         strikes = pm._fails[peer][0]
@@ -863,8 +873,7 @@ def main(argv=None) -> int:
             peer = getattr(channel, "peer", None) or "client"
             note = f"{peer} connected"
             if pm:
-                note += (" · known device" if pm.is_paired(peer)
-                         else " · NEW device - will ask for the pairing code")
+                note += " · will pair by token or code"
             log(note)
             t0 = time.monotonic()
             term = Terminal(channel, cfg)
