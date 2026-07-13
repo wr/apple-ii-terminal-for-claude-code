@@ -68,22 +68,30 @@ BOLD = "\x1b[1m" if _TTY else ""
 CORAL = "\x1b[38;5;209m" if _TTY else ""
 OFF = "\x1b[0m" if _TTY else ""
 
-def log(msg: str) -> None:
+_PEERW = 15  # column width for the peer/IP, so every line aligns (max IPv4 len)
+
+
+def _line(peer, body: str) -> None:
+    """Emit one console line: timestamp, an aligned peer column, then body.
+    A peerless line (peer=None) leaves the column blank so everything lines up."""
+    p = f"{peer:<{_PEERW}}" if peer else " " * _PEERW
+    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {p} ·{OFF} {body}", flush=True)
+
+
+def log(msg: str, peer=None) -> None:
     """Plumbing chatter on the host console (never sent to the Apple II)."""
-    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {msg}{OFF}", flush=True)
+    _line(peer, f"{GRAY}{msg}{OFF}")
 
 
 def show_user(peer, text: str) -> None:
     """Mirror a line the Apple II user typed."""
-    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {peer or 'client'}{OFF} "
-          f"{BOLD}> {text}{OFF}", flush=True)
+    _line(peer or "client", f"{BOLD}> {text}{OFF}")
 
 
 def show_reply(peer, secs: float, nlines: int, mode: str) -> None:
     """Note that a reply went out - metadata only, not the text."""
-    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {peer or 'client'}{OFF} "
-          f"{CORAL}< {mode} reply sent · {secs:.1f}s · {nlines} lines{OFF}",
-          flush=True)
+    _line(peer or "client",
+          f"{CORAL}< {mode} reply sent · {secs:.1f}s · {nlines} lines{OFF}")
 
 
 def _lan_ip():
@@ -208,7 +216,8 @@ def send_header(term, backend) -> None:
         term.write_line(line)
 
 
-def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
+def run_app_session(term: Terminal, args, backend, backend_err, mode,
+                    pair_via=None) -> None:
     """Protocol for the native clients (apple2gs/claude.s and
     apple2/claude2.s): the bridge stays silent (no banner, no prompts, no
     echo) and just relays the backend's reply, then sends EOT. The Apple II
@@ -221,18 +230,24 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
     if backend:  # learn the model/cwd/version, then show the header at boot
         backend.prime()
         send_header(term, backend)
+        if pair_via == "code":
+            # Paired via a typed code: the client is still in recv_reply reading
+            # the reply, and require_pairing sent the token frame WITHOUT an EOT.
+            # Terminate it here, AFTER the header - so the client renders the
+            # version string before its deferred token write goes deaf.
+            term.write(EOT)
     fresh = True  # no real user input yet: modem chatter is still expected
     while not term.closed:
         user = term.read_line()  # no prompt, echo off - the app echoes locally
         if user is None:
-            log("channel closed by peer")
+            log("channel closed by peer", peer=peer)
             return
         user = user.strip()
         if user.upper().startswith("ATD"):
             # Connect on the client's menu dials unconditionally; when the
             # modem was already online the dial string comes through to us
             # as data - swallow it
-            log("modem dial string while already online - ignored")
+            log("modem dial string while already online - ignored", peer=peer)
             continue
         if not user or user == "\x03":
             if backend:      # session-open probe: refresh the real header
@@ -240,7 +255,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
             term.write(EOT)
             continue
         if fresh and is_modem_chatter(user):
-            log(f"modem chatter ignored: {user!r}")
+            log(f"modem chatter ignored: {user!r}", peer=peer)
             continue
         if _looks_like_token(user):
             # A native client re-runs session_start and auto-sends its stored
@@ -253,7 +268,8 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
             # re-send the header so the reconnected client's UI repopulates,
             # and swallow the token. (Not gated on `fresh`: a live reconnect
             # arrives mid-session.)
-            log("device token as a line (reconnect/stale) - re-synced header")
+            log("device token as a line (reconnect/stale) - re-synced header",
+                peer=peer)
             if backend:
                 send_header(term, backend)
             term.write(EOT)
@@ -293,7 +309,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
                 for chunk in b.stream(u):
                     chunks.put(chunk)
             except Exception as exc:
-                log(f"stream error: {exc}")
+                log(f"stream error: {exc}", peer=peer)
                 chunks.put("\n[bridge error: reply failed]")
             finally:
                 chunks.put(None)
@@ -424,7 +440,7 @@ class PairingManager:
                 json.dump({"v": 2, "devices": self.devices}, f)
             os.replace(tmp, self.store_path)
         except OSError as exc:
-            log(f"pairing: could not persist ({exc})")
+            log(f"could not persist paired devices ({exc})")
 
     def clear_paired(self) -> int:
         """Revoke every remembered device. Returns how many were dropped."""
@@ -498,7 +514,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
     """Gate a listening bridge behind the manager's code. Returns False if the
     caller hung up, was locked out, or the pairing window had already closed."""
     peer = getattr(term.ch, "peer", None)
-    log(f"pairing: waiting for code from {peer} (code: {pm.code})")
+    log("waiting for the pairing code", peer=peer)  # code is in the startup banner
     # Don't push the prompt proactively: on a native client the connect
     # happens while the user is still on the boot menu, whose buffer drain
     # discards unsolicited bytes - the prompt would be eaten and the lock
@@ -515,7 +531,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
         if line.upper().startswith("ATD"):
             continue  # the client's auto-dial isn't a guess
         if is_modem_chatter(line):
-            log(f"pairing: modem chatter ignored: {line!r}")
+            log(f"modem chatter ignored: {line!r}", peer=peer)
             continue  # ...and neither is the modem's own announcement
         if not line:
             if args.app and not prompted:
@@ -525,14 +541,14 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                 prompted = True
             continue
         if pm.check_token(line):  # a client auto-presenting its stored token
-            log(f"pairing: {peer} paired via token")
+            log("paired (token)", peer=peer)
             if args.app:
-                term.write(EOT)
+                term.write(EOT)  # client is idle; EOT lets it proceed
             else:
                 term.write_line("Paired - go ahead.")
-            return True
+            return "token"
         if not pm.window_open():   # window gates NEW (code) pairing only
-            log(f"pairing: window closed; refusing new device {peer}")
+            log("pairing window closed - refusing new device", peer=peer)
             if args.app:
                 _lock_header(term, ("Terminal for Claude Code",
                                     "PAIRING CLOSED - restart the bridge",
@@ -548,7 +564,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             # guess: the client is idle in its main loop and only renders header
             # frames, so a plain "wrong code" line is invisible. Push the LOCKED
             # prompt (a header frame) so the user can type the code, no strike.
-            log(f"pairing: {peer} sent an unrecognized token - prompting for code")
+            log("unrecognized token - prompting for code", peer=peer)
             if args.app:
                 _lock_header(term, ("Terminal for Claude Code",
                                     "LOCKED - type the pairing code",
@@ -559,7 +575,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             prompted = True
             continue
         if pm.exhausted(peer):
-            log(f"pairing: {peer} hit the guess cap - locked out")
+            log("guess cap reached - locked out", peer=peer)
             term.write_line("Too many wrong codes. Restart the bridge to retry.")
             if args.app:
                 term.write(EOT)
@@ -567,13 +583,19 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
         if pm.check(peer, line.upper()):  # code alphabet is uppercase-only
             if args.app:
                 tok = pm.issue_token(peer)
+                # Send the token frame WITHOUT a terminating EOT. The client
+                # typed the code and is in its reply-reader (recv_reply); if we
+                # sent EOT here it would return and then go deaf writing the
+                # token, dropping the version-string header that run_app_session
+                # sends next. Instead run_app_session sends the header THEN the
+                # EOT (see pair_via == "code"), so the header renders first.
                 term.write(CMD_TOKEN + tok.encode("ascii") + b"\r")
-                log(f"pairing: {peer} paired; issued token")
-                term.write(EOT)
+                log("paired; issued token", peer=peer)
+                return "code"
             else:
-                log(f"pairing: {peer} paired via code")
+                log("paired (code)", peer=peer)
                 term.write_line("Paired - go ahead.")
-            return True
+            return "token"
         wait = pm.record_failure(peer)
         strikes = pm._fails[peer][0]
         left = pm.MAX_TRIES - strikes
@@ -583,8 +605,8 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
         if args.app:
             term.write(EOT)
         prompted = True
-        log(f"pairing: wrong code from {peer} "
-            f"(strike {strikes}/{pm.MAX_TRIES}, backoff {wait:.0f}s)")
+        log(f"wrong code (strike {strikes}/{pm.MAX_TRIES}, backoff {wait:.0f}s)",
+            peer=peer)
         time.sleep(min(wait, pm.SLEEP_CAP))  # bounded throttle, not a hang
     return False
 
@@ -617,8 +639,8 @@ class _IdleGuard:
     def _watch(self) -> None:
         while not self._done.wait(0.5):
             if self._armed and time.monotonic() - self._last >= self._timeout:
-                log(f"idle timeout: dropping {self.peer or 'peer'} after "
-                    f"{self._timeout}s of silence")
+                log(f"idle timeout after {self._timeout:.0f}s of silence",
+                    peer=self.peer)
                 try:
                     self._ch.close()  # unblocks the reader with a closed channel
                 except Exception:
@@ -664,8 +686,11 @@ def run_session(term: Terminal, args, pm: PairingManager | None = None) -> None:
 
 
 def _run_session(term: Terminal, args, pm, guard) -> None:
-    if pm and not require_pairing(term, args, pm):
-        return
+    pair_via = None
+    if pm:
+        pair_via = require_pairing(term, args, pm)  # False | "token" | "code"
+        if not pair_via:
+            return
     if guard:
         guard.disarm()  # authenticated (or no gate): the peer owns the session
     cols = args.cols
@@ -678,7 +703,7 @@ def _run_session(term: Terminal, args, pm, guard) -> None:
         backend_err = str(exc)
 
     if args.app:
-        return run_app_session(term, args, backend, backend_err, mode)
+        return run_app_session(term, args, backend, backend_err, mode, pair_via)
 
     for line in BANNER:
         term.write_line(line)
@@ -687,17 +712,18 @@ def _run_session(term: Terminal, args, pm, guard) -> None:
         term.write_line("Try /mode code, or set ANTHROPIC_API_KEY and reconnect.")
         term.write_line("")
 
+    peer = getattr(term.ch, "peer", None)
     fresh = True  # no real user input yet: modem chatter is still expected
     while not term.closed:
         user = term.read_line(prompt="\r\nYou> ")
         if user is None:
-            log("channel closed by peer")
+            log("channel closed by peer", peer=peer)
             return  # channel closed
         user = user.strip()
         if not user or user == "\x03":
             continue
         if fresh and is_modem_chatter(user):
-            log(f"modem chatter ignored: {user!r}")
+            log(f"modem chatter ignored: {user!r}", peer=peer)
             continue
         fresh = False
         show_user(getattr(term.ch, "peer", None), user)
@@ -899,11 +925,11 @@ def main(argv=None) -> int:
         pm = PairingManager(args.pair_code, ttl_secs=args.pair_ttl * 60)
         if args.clear_paired:
             n = pm.clear_paired()
-            log(f"pairing: revoked {n} remembered device(s)")
+            log(f"revoked {n} remembered device(s)")
     elif args.clear_paired:
         # honour --clear-paired even alongside --no-pair or a re-run to reset
         n = PairingManager("", 0).clear_paired()
-        log(f"pairing: revoked {n} remembered device(s)")
+        log(f"revoked {n} remembered device(s)")
 
     print_banner(args, transport, pm)
     if args.telnet:
@@ -912,19 +938,16 @@ def main(argv=None) -> int:
     try:
         for channel in transport.channels():
             peer = getattr(channel, "peer", None) or "client"
-            note = f"{peer} connected"
-            if pm:
-                note += " · will pair by token or code"
-            log(note)
+            log("connected", peer=peer)
             t0 = time.monotonic()
             term = Terminal(channel, cfg)
             try:
                 run_session(term, args, pm)
             except Exception as exc:  # one peer must never take down the listener
-                log(f"session error for {peer}: {exc}")
+                log(f"session error: {exc}", peer=peer)
             finally:
                 channel.close()
-                log(f"{peer} disconnected after {time.monotonic() - t0:.0f}s")
+                log(f"disconnected after {time.monotonic() - t0:.0f}s", peer=peer)
     except KeyboardInterrupt:
         print()
         log("shutting down")

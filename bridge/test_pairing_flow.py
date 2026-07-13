@@ -68,13 +68,13 @@ def test_valid_token_first_line_pairs_without_code(tmp_path):
     pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
     tok = pm.issue_token("10.0.0.5")
     term = _FakeTerm([tok])
-    assert require_pairing(term, _args(), pm) is True
+    assert require_pairing(term, _args(), pm) == "token"
 
 
 def test_first_run_code_issues_token_frame(tmp_path):
     pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
     term = _FakeTerm(["", "ABC123"])  # blank line (prompt), then the code
-    assert require_pairing(term, _args(), pm) is True
+    assert require_pairing(term, _args(), pm) == "code"
     # A CMD_TOKEN frame (0x05 + 32 chars + CR) was written to the client.
     assert bytes(CMD_TOKEN) in term.written
     idx = term.written.index(CMD_TOKEN[0])
@@ -86,7 +86,7 @@ def test_first_run_code_issues_token_frame(tmp_path):
 def test_wrong_token_falls_through_to_code(tmp_path):
     pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
     term = _FakeTerm(["ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", "ABC123"])
-    assert require_pairing(term, _args(), pm) is True
+    assert require_pairing(term, _args(), pm)
 
 
 def test_valid_token_pairs_after_window_closes(tmp_path):
@@ -98,7 +98,7 @@ def test_valid_token_pairs_after_window_closes(tmp_path):
     pm.born = time.monotonic() - 3600   # force the window closed
     assert pm.window_open() is False
     term = _FakeTerm([tok])
-    assert require_pairing(term, _args(), pm) is True
+    assert require_pairing(term, _args(), pm)
 
 
 def test_looks_like_token_shape():
@@ -147,7 +147,35 @@ def test_stale_token_prompts_for_code_without_strike(tmp_path):
     pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
     stale = gen_token()  # a token pm has never issued
     term = _FakeTerm([stale, "ABC123"])  # stale token, then the real code
-    assert require_pairing(term, _args(), pm) is True
+    assert require_pairing(term, _args(), pm)
     assert pm._fails.get("10.0.0.5") is None            # no strike burned
     assert 0x0E in term.written                          # LOCKED header pushed
     assert bytes(CMD_TOKEN) in term.written              # fresh token issued
+
+
+def test_code_pairing_defers_eot_to_after_header(tmp_path):
+    # Bug E: require_pairing must send the CMD_TOKEN frame WITHOUT a trailing
+    # EOT on the code path (an EOT here would end the client's recv_reply before
+    # the version-string header). It returns "code" so run_app_session knows to
+    # terminate later.
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    term = _FakeTerm(["", "ABC123"])
+    assert require_pairing(term, _args(), pm) == "code"
+    assert bytes(CMD_TOKEN) in term.written
+    idx = term.written.index(CMD_TOKEN[0])
+    assert EOT[0] not in term.written[idx:]   # no terminating EOT in require_pairing
+
+
+def test_run_app_session_code_pairing_sends_header_before_eot():
+    # run_app_session must emit the header frame, THEN the terminating EOT, when
+    # pair_via == "code" - so the client renders the version string before its
+    # deferred token write goes deaf.
+    class _BE(_FakeBackend):
+        def header(self):
+            return ("Claude Code v1", "Opus", "~/x")
+    term = _FakeTerm([None])
+    run_app_session(term, _args(cols=80), _BE(), None, "code", pair_via="code")
+    w = bytes(term.written)
+    assert 0x0E in w                       # header frame written
+    assert EOT[0] in w                     # terminated
+    assert w.index(0x0E) < w.index(EOT[0]) # header BEFORE the terminating EOT
