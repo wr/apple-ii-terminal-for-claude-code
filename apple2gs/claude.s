@@ -650,12 +650,42 @@ session_start:
         ; tok_valid in Z; sccput/lda both CLOBBER those flags, so we consume them
         ; to pick the branch BEFORE any transmit, and each case sends once.
         ; The token helpers exit .a16/.i16 (they rep #$30 before rts).
+        lda     BORDERCOL
+        and     #$F0            ; DEBUG breadcrumb: DARK BLUE = before tok_init_dev
+        ora     #$02            ; (here .a8/.i8: 8-bit BORDERCOL store)
+        sta     BORDERCOL
         jsr     tok_init_dev
         .a16
         .i16
+        sep     #$20            ; DEBUG breadcrumb: MEDIUM BLUE = before token_read
+        .a8                     ; (sep/rep + lda/and/ora/sta touch no CPU flag we need)
+        lda     BORDERCOL
+        and     #$F0
+        ora     #$06
+        sta     BORDERCOL
+        rep     #$20
+        .a16
         jsr     token_read
+        sep     #$20            ; DEBUG breadcrumb: GREEN = token_read returned
+        .a8                     ; sep/rep/lda/and/ora/sta all PRESERVE carry, so
+        lda     BORDERCOL       ; token_read's carry survives for bcs below
+        and     #$F0
+        ora     #$0C
+        sta     BORDERCOL
+        rep     #$20
+        .a16
         bcs     st_probe        ; RWTS read failed (write-protected/no disk)
         jsr     tok_valid
+        php                     ; DEBUG breadcrumb: YELLOW = tok_valid returned
+        sep     #$20            ; lda/and/ora WOULD clobber tok_valid's Z, so
+        .a8                     ; php/plp bracket it to preserve Z for bne
+        lda     BORDERCOL
+        and     #$F0
+        ora     #$0E
+        sta     BORDERCOL
+        rep     #$20
+        .a16
+        plp
         bne     st_probe        ; no/invalid token on disk: bare probe
         ; valid token: present it as the FIRST line the bridge reads, so a
         ; paired device skips the code prompt. The bridge answers with EOT +
