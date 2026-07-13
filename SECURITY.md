@@ -37,6 +37,7 @@ Ongoing pairing/hardening work is tracked separately; this file describes what s
 ### What's logged and stored
 
 - **Prompts print to the console.** Every line you type from the Apple II is echoed to the bridge's own stdout so you can watch the session. Replies are logged as metadata only (timing and line count), not their text.
-- **Paired peer IPs touch disk.** Once a device pairs, its IP address is written to `~/.config/claude-ii-terminal/paired.json` so it doesn't have to re-enter the code after a restart. Delete that file, or run `--clear-paired`, to forget them.
+- **Only a token hash touches disk.** Once a device pairs, the bridge mints a 160-bit device token, sends it to the client once (`CMD_TOKEN`, `0x05`), and persists only its SHA-256 — never the plaintext — in `~/.config/claude-ii-terminal/paired.json` (schema v2, directory `0700`, file `0600`, written atomically). A reconnect proves itself by presenting that token, matched with a constant-time compare. Peer IPs are logged for visibility but are never trusted as proof of identity. Delete the file, or run `--clear-paired`, to forget every device.
+- **The token itself lives in plaintext on the Apple II disk** (written to a reserved sector so the client can auto-present it on reconnect). Anyone with physical or disk-image access to that floppy/SD card can extract it — this is an accepted risk of a client with no secure storage of its own; treat the disk like a house key.
 
 Nothing else is persisted, and nothing is sent anywhere but to Claude for the actual conversation.
