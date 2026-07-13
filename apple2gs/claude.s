@@ -60,6 +60,7 @@ EOT        = $04
 CMD_COLOR  = $01       ; in-band: next byte sets txtcolor (1 gray/2 coral/3 white)
 CMD_BULLET = $02       ; in-band: draw the white reply bullet here
 CMD_QUIT   = $03       ; in-band: bridge says session over -> back to the menu
+CMD_TOKEN  = $05       ; in-band: bridge issues a device token; we store it to disk
 CMD_HEADER = $0E       ; in-band: header frame follows (title CR subtitle CR)
 
 ; ---- token sector (device pairing): RWTS a reserved sector on the boot disk.
@@ -640,10 +641,46 @@ session_start:
         and     #$08
         sta     dcd_active
 
-        lda     #$0D            ; session-open probe: the bridge answers
-        jsr     sccput          ; with the header - or, if this device
-                                ; isn't paired, a LOCKED header telling
-                                ; the user to type the code
+        ; auto-pair vs. bare probe. Do the RWTS token read FIRST, while the
+        ; bridge is still SILENT (require_pairing pushes nothing until it reads
+        ; a line from us). If we probed first, the bridge's synchronous
+        ; LOCKED-header reply would land during the ~100-200ms deaf RWTS read
+        ; and the SCC's 3-byte FIFO would drop it on real hardware - the user
+        ; would never see the prompt. token_read returns its result in carry and
+        ; tok_valid in Z; sccput/lda both CLOBBER those flags, so we consume them
+        ; to pick the branch BEFORE any transmit, and each case sends once.
+        ; The token helpers exit .a16/.i16 (they rep #$30 before rts).
+        jsr     tok_init_dev
+        .a16
+        .i16
+        jsr     token_read
+        bcs     st_probe        ; RWTS read failed (write-protected/no disk)
+        jsr     tok_valid
+        bne     st_probe        ; no/invalid token on disk: bare probe
+        ; valid token: present it as the FIRST line the bridge reads, so a
+        ; paired device skips the code prompt. The bridge answers with EOT +
+        ; the real header - no separate bare-CR probe needed.
+        sep     #$30
+        .a8
+        .i8
+        ldx     #0
+st_snd: cpx     TOKBUF+6        ; +6 = stored token length
+        beq     st_sndcr
+        lda     TOKBUF+7,x      ; token bytes live at +7..
+        jsr     sccput          ; sccput preserves X
+        inx
+        bra     st_snd          ; len < 40, so X never wraps
+st_sndcr:
+        lda     #$0D
+        jsr     sccput
+        bra     st_afterprobe
+st_probe:
+        sep     #$30            ; arrived here .a16/.i16 (token helper exit)
+        .a8
+        .i8
+        lda     #$0D            ; session-open probe: the bridge answers with the
+        jsr     sccput          ; LOCKED header (fresh/errored/unpaired disk)
+st_afterprobe:
 
 ; =====================================================================
 ; main loop
@@ -1402,6 +1439,8 @@ sp_nk:
         beq     sp_exj
         cmp     #CMD_HEADER
         beq     sp_exj
+        cmp     #CMD_TOKEN      ; token frame can be the first byte back (issued
+        beq     sp_exj          ; right after a good code) - keep it for recv_reply
         cmp     #CMD_QUIT
         beq     sp_q            ; session over: latch it, keep draining to EOT
         cmp     #$20
@@ -1636,6 +1675,8 @@ rr_nocp:
         beq     rr_bullet
         cmp     #CMD_HEADER     ; 0x0E -> header frame (title CR subtitle CR)
         beq     rr_header
+        cmp     #CMD_TOKEN      ; 0x05 -> capture + persist a freshly issued token
+        beq     rr_token
         cmp     #CMD_QUIT       ; 0x03 -> session over after this reply
         beq     rr_quit
         cmp     #$0A            ; skip LF
@@ -1659,6 +1700,14 @@ rr_bullet:
         bra     rr_next
 rr_header:
         jsr     do_header
+        bra     rr_next
+rr_token:
+        jsr     do_token        ; capture + persist a freshly issued token
+        .a16                    ; do_token exits .a16/.i16 (token_write reps)
+        .i16
+        sep     #$30            ; back to recv_reply's 8-bit
+        .a8
+        .i8
         bra     rr_next
 rr_done:
         lda     #$0D
@@ -1895,6 +1944,50 @@ tv_done:
 tv_bad: lda     #1              ; Z=0: invalid
 tv_exit:
         rep     #$30            ; rep preserves Z from the lda above
+        .a16
+        .i16
+        rts
+
+; do_token - a CMD_TOKEN frame is arriving: read the CR-terminated token, frame
+; it into TOKBUF in the on-disk layout, and RWTS-write it. getbyte polls rb_poll
+; so the ring can't overflow while we read. Exits .a16/.i16.
+do_token:
+        sep     #$30
+        .a8
+        .i8
+        ldx     #0
+dt_wm:  lda     tok_magic,x     ; stamp the magic
+        sta     TOKBUF,x
+        inx
+        cpx     #6
+        bne     dt_wm
+        ldx     #0
+dt_rt:  jsr     getbyte         ; getbyte enters/exits .a8/.i8
+        and     #$7F
+        cmp     #$0D
+        beq     dt_fin
+        sta     TOKBUF+7,x
+        inx
+        cpx     #$28            ; hard cap 40 (token is 32) - never overrun
+        bcc     dt_rt
+dt_fin: stx     TOKBUF+6        ; length
+        lda     #0
+        ldy     #0
+dt_ck1: clc
+        adc     TOKBUF,y        ; sum magic+len: indices 0..6
+        iny
+        cpy     #7
+        bcc     dt_ck1
+        ldy     #0
+dt_ck2: cpy     TOKBUF+6
+        beq     dt_ckd
+        clc
+        adc     TOKBUF+7,y      ; sum token: indices 7..6+len
+        iny
+        bne     dt_ck2
+dt_ckd: ldy     TOKBUF+6
+        sta     TOKBUF+7,y      ; store checksum at index 7+len
+        jsr     token_write     ; exits .a16/.i16; ignore carry (write-protect = no persist)
         .a16
         .i16
         rts
