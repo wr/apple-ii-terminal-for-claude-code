@@ -275,7 +275,8 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
                 for chunk in b.stream(u):
                     chunks.put(chunk)
             except Exception as exc:
-                chunks.put(f"\n[bridge error: {exc}]")
+                log(f"stream error: {exc}")
+                chunks.put("\n[bridge error: reply failed]")
             finally:
                 chunks.put(None)
 

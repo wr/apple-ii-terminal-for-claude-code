@@ -17,6 +17,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 from typing import Iterator
 
@@ -217,7 +218,8 @@ class ChatBackend(Backend):
         except Exception as exc:  # surface the error to the terminal, keep going
             # Roll back the user turn so the next message starts clean.
             self._messages.pop()
-            yield f"\n[bridge error: {exc}]"
+            print(f"[bridge] chat backend error: {exc}", file=sys.stderr, flush=True)
+            yield "\n[bridge error: chat request failed]"
         finally:
             self._stream = None
 
@@ -414,7 +416,9 @@ class CodeBackend(Backend):
                                          # claude and its children in one signal
             )
         except FileNotFoundError:
-            yield f"\n[bridge error: '{self._bin}' not found on the host]"
+            print(f"[bridge] claude binary not found: {self._bin!r}",
+                  file=sys.stderr, flush=True)
+            yield "\n[bridge error: claude CLI not found on the host]"
             return
 
         self._proc = proc
@@ -453,7 +457,9 @@ class CodeBackend(Backend):
             return  # we killed it; a nonzero exit code is expected, not news
         if proc.returncode not in (0, None):
             err = "".join(err_parts).strip()
-            yield f"\n[claude exited {proc.returncode}{': ' + err if err else ''}]"
+            if err:
+                print(f"[bridge] claude stderr: {err}", file=sys.stderr, flush=True)
+            yield f"\n[claude exited {proc.returncode}]"
 
     def _render_event(self, event: dict) -> Iterator[str]:
         etype = event.get("type")
