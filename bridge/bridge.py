@@ -460,8 +460,9 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
     # (the client is in its reply-reader by then and renders it), and end
     # every answer with EOT so it never hangs.
     prompted = False
+    ceiling = time.monotonic() + max(30.0, getattr(args, "idle_timeout", 60) or 60)
     while not term.closed:
-        line = term.read_line()
+        line = term.read_line(deadline=ceiling)
         if line is None:
             return False
         line = line.strip()
