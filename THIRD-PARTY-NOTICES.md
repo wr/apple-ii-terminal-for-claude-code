@@ -41,6 +41,18 @@ hasn't given.
 - How to obtain / verify: see the "Base disk image" section of the README. The
   SHA-256 above pins the exact image `build.sh` expects.
 
+### Apple IIgs product photograph (README demo)
+
+- File: `docs/demo.gif` (composite; the photograph is not stored separately)
+- Copyright: (c) Apple Computer, Inc. The base image is an Apple IIgs product
+  photo, credited "Image Credit: Apple Inc." (left visible in the composite).
+- License / status: Apple's promotional photograph, no redistribution license.
+  Used here in good faith to show the client running on the hardware; the only
+  moving, original content is our own client UI composited onto the screen.
+  No affiliation with Apple; will be removed on a rights holder's request.
+- In repo: yes, as the base layer of the animated `docs/demo.gif` README hero.
+- In release: no (documentation asset only, not part of `CLAUDE.dsk`).
+
 ### "Clawd" mascot artwork (Anthropic)
 
 - File: `apple2gs/clawd.gif` (38,060 bytes)

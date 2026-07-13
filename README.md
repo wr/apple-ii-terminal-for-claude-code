@@ -2,7 +2,7 @@
 
 A real Apple II, as a terminal for Claude Code.
 
-![An Apple IIgs displaying the Claude Code client on its CRT: the animated Clawd splash, the boot menu, and a live session, with scanline glow](docs/demo.gif)
+![A full Apple IIgs setup — CPU, drives, keyboard, and mouse — with the Claude Code client on its CRT: the animated Clawd splash, boot menu, and a live session under scanline glow](docs/demo.gif)
 
 Boot a 140K floppy, dial a WiFi modem, and your Apple II becomes a terminal for the real `claude` CLI, bridged from a modern machine. The disk image is bootable on every model from the IIgs down to the II+ (or in an emulator).
 
