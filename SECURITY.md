@@ -1,0 +1,42 @@
+# Security
+
+This project bridges a real `claude` CLI to an Apple II over a serial line or your LAN. In code mode that CLI reads and writes files and runs commands on the host, so a few things are worth being plain about.
+
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| 1.0.x | Yes |
+| < 1.0 | No |
+
+Fixes land on the latest 1.0.x release.
+
+## Reporting a vulnerability
+
+Open a [GitHub issue](https://github.com/wr/apple-ii-terminal-for-claude-code/issues). For anything you'd rather not post in the open, use GitHub's private ["Report a vulnerability"](https://github.com/wr/apple-ii-terminal-for-claude-code/security/advisories/new) advisory flow, or email the maintainer at media [at] wells [dot] ee. I'll respond as soon as I can — this is a hobby project, so no formal SLA.
+
+## Security model
+
+The bridge is one Python script you run on your own machine. It has no accounts, no server, and no telemetry. What matters is who can reach it and what it does with what it hears.
+
+### Network exposure
+
+`--telnet` makes the bridge listen for a WiFi modem or TCP client (port 6400). In code mode that hands whoever connects a `claude` session — effectively a shell — on the host. **Run it only on a home LAN you trust. Never port-forward it or bind it to a public interface.** Use `--host 127.0.0.1` to keep it local, or a serial cable (`--serial`) to avoid the network entirely.
+
+### The pairing gate
+
+A listening bridge is gated by a pairing code before any session proceeds (`--telnet` only; disable with `--no-pair` on an isolated network). It's already hardened:
+
+- A **6-character code** (uppercase + digits, look-alikes dropped; ~8.9e8 combinations) printed at startup. Set your own with `--pair-code`.
+- **Per-peer exponential backoff and a hard guess cap** — 3 free tries, then doubling delays, 10 attempts max per peer per run. Strike counts are keyed by IP and survive reconnects, so a caller can't reset them by redialing.
+- **An expiring window**: the code stops accepting new devices after `--pair-ttl` minutes (default 15; `0` never expires).
+- **Revocation**: `--clear-paired` (or the startup flag) forgets every remembered device.
+
+Ongoing pairing/hardening work is tracked separately; this file describes what ships today.
+
+### What's logged and stored
+
+- **Prompts print to the console.** Every line you type from the Apple II is echoed to the bridge's own stdout so you can watch the session. Replies are logged as metadata only (timing and line count), not their text.
+- **Paired peer IPs touch disk.** Once a device pairs, its IP address is written to `~/.config/claude-ii-terminal/paired.json` so it doesn't have to re-enter the code after a restart. Delete that file, or run `--clear-paired`, to forget them.
+
+Nothing else is persisted, and nothing is sent anywhere but to Claude for the actual conversation.

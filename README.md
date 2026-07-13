@@ -17,7 +17,7 @@ Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones t
 
 ### Prerequisites:
 
-1. An Apple II
+1. An Apple II (IIgs down to the II+ — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the tested-model matrix)
 2. A Hayes-compatible modem (or modem emulator like the [WiModem 232 Pro](https://www.cbmstuff.com/index.php?route=product/product&path=59_66&product_id=113)) OR a serial connection to your modern Mac.
 3. [FloppyEmu](https://www.bigmessowires.com/floppy-emu/) or some way of writing a `.dsk` image to a floppy disk
 4. [Claude Code](https://claude.com/claude-code) installed and logged in on your modern Mac
@@ -33,9 +33,11 @@ Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones t
    python3 ./bridge.py --telnet --app --backend code --workdir ~/your-project
    ```
 
-   It prints a 6-character pairing code and listens on TCP 6400. The first thing a new device sends must be that code. Once paired, the client's IP is remembered across restarts.
+   It prints a 6-character pairing code and listens on TCP 6400. The first thing a new device sends must be that code. Once paired, the client's IP is remembered across restarts. `--workdir` is the project Claude Code works in — in code mode it reads and writes files and runs commands in that directory, so point it at the repo you actually want on the wire.
 
    > **Trusted LAN only.** `--telnet` exposes a Claude session (in code mode, a shell on the host) to your network. Run it on a home LAN you trust and never port-forward it or bind it to a public interface. See [pairing flags](#advanced-bridge-options) to rotate, expire, or revoke access.
+
+   > **What the bridge records.** Every prompt you type from the Apple II prints to the bridge's own console (replies are logged as metadata only, not text). Paired devices' IP addresses are written to `~/.config/claude-ii-terminal/paired.json`. Nothing leaves your machine except the conversation with Claude. Full picture in [SECURITY.md](SECURITY.md).
 
 2. **Modem**: store the bridge's address as phone book entry 0, then save:
 
