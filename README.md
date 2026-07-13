@@ -18,6 +18,7 @@ Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones t
 2. A Hayes-compatible modem (or modem emulator like the [WiModem 232 Pro](https://www.cbmstuff.com/index.php?route=product/product&path=59_66&product_id=113)) OR a serial connection to your modern Mac.
 3. [FloppyEmu](https://www.bigmessowires.com/floppy-emu/) or some way of writing a `.dsk` image to a floppy disk
 4. [Claude Code](https://claude.com/claude-code) installed and logged in on your modern Mac
+5. The **CLAUDE.dsk** disk image, from [Releases](https://github.com/wr/apple-ii-terminal-for-claude-code/releases) (or built from source, below)
 
 ### Setup:
 
@@ -52,7 +53,7 @@ To update later, download the new release image and re-run `install-sd.sh`; it o
 
 ## Emulator instructions
 
-I used [KEGS](https://kegs.sourceforge.net/), but any Apple II emulator with serial emulation should work.
+I used [KEGS](https://kegs.sourceforge.net/), but any Apple II emulator with serial emulation should work. (KEGS needs an Apple IIgs ROM file you supply — see the KEGS docs.)
 
 1. Download **CLAUDE.dsk** from [Releases](https://github.com/wr/apple-ii-terminal-for-claude-code/releases).
 2. In KEGS, press **F4**: set **s6d1** to `CLAUDE.dsk`, and set Serial Port **Slot 2** to **Incoming** (KEGS then listens on TCP 6502).

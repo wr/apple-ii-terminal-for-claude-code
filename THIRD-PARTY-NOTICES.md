@@ -90,5 +90,5 @@ install.
 ## Maintenance
 
 When a bundled or build-time input changes, update its SHA-256 here. The DOS 3.3
-master and `clawd.gif` checksums also appear in the README so users can verify
-the exact bytes.
+master's checksum also appears in the README (the "Building from source"
+section) so users can verify the exact base image.
