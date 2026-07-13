@@ -58,23 +58,29 @@ class Terminal:
 
     def _handle_iac(self) -> None:
         verb = self._raw_byte_blocking()
+        if verb is None:
+            return  # peer gone mid-sequence
         if verb in (DO, DONT, WILL, WONT):
             opt = self._raw_byte_blocking()
+            if opt is None:
+                return  # peer gone before the option byte
             # Politely refuse anything we didn't ask for; stay in char mode.
             if verb == DO:
                 self.ch.write(bytes([IAC, WONT, opt]))
             elif verb == WILL:
                 self.ch.write(bytes([IAC, DONT, opt]))
         elif verb == SB:
-            # Skip a sub-negotiation block up to IAC SE.
+            # Skip a sub-negotiation block up to IAC SE, bounded so a peer
+            # that never sends SE can't park us here forever.
             prev = None
-            while True:
+            for _ in range(512):
                 b = self._raw_byte_blocking()
                 if b is None:
                     return
                 if prev == IAC and b == SE:
                     return
                 prev = b
+            return  # oversized subnegotiation: give up, stay in char mode
 
     # -- low level ---------------------------------------------------------- #
     def _raw_byte_blocking(self) -> int | None:

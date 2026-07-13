@@ -835,6 +835,8 @@ def main(argv=None) -> int:
             term = Terminal(channel, cfg)
             try:
                 run_session(term, args, pm)
+            except Exception as exc:  # one peer must never take down the listener
+                log(f"session error for {peer}: {exc}")
             finally:
                 channel.close()
                 log(f"{peer} disconnected after {time.monotonic() - t0:.0f}s")
