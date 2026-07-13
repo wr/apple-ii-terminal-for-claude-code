@@ -57,6 +57,19 @@ hasn't given.
 - Note: the session-screen mascot is a separate, original drawing and is not
   derived from this file.
 
+### Apple IIgs product photograph (README demo)
+
+- File: baked into `docs/demo.gif`; the photograph is not stored separately.
+- Copyright: (c) Apple Computer, Inc. The base layer of the animated README
+  hero is an Apple IIgs product photo.
+- License / status: Apple's promotional photograph, no redistribution license.
+  Used here in good faith to show the client running on the hardware; the only
+  original, moving content is our own client UI composited onto the screen. No
+  affiliation with Apple, and it will be removed on a rights holder's request.
+- In repo: yes, as the still base layer of the animated `docs/demo.gif`.
+- In release: no. `docs/demo.gif` is a documentation asset; it is not part of
+  `CLAUDE.dsk`.
+
 ### unscii-8 bitmap font
 
 - File: `apple2gs/unscii-8.hex`
