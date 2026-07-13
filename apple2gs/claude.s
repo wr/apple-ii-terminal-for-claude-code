@@ -289,9 +289,9 @@ act_connect:
         beq     ac_nocar
         lda     dcd_trust
         beq     ac_dial
-        lda     rb_head         ; carrier's still up: skip the redial,
-        sta     rb_tail         ; straight into the session
-        jmp     session_start
+        jmp     modem_resume    ; carrier's up, skip the redial - but the modem
+                                ; may have dropped to command mode on a reconnect,
+                                ; so resume the data link before the session opens
 ac_nocar:
         lda     #1              ; the pin can go low, so a high means a carrier
         sta     dcd_trust
@@ -1136,6 +1136,33 @@ md_cr:  lda     #$0D
         jsr     sccput
         rts
 
+; modem_resume - skip-dial reconnect path only. Carrier is up but a WiModem
+; that dropped to COMMAND mode after a Ctrl-C-to-menu would treat the auto-sent
+; device token as an AT command and echo it on its own screen instead of
+; passing it to the bridge (Bug F). Send ATO to resume the data link first.
+; Harmless if we were truly still in data mode: ATO goes out as data, and the
+; bridge already swallows a passed-through ATO line. .a8/.i8 in; jmps to
+; session_start, which sets its own width. sccput/vbl_edge/rb_poll preserve X.
+modem_resume:
+        .a8
+        .i8
+        ldx     #0
+mr_snd: lda     str_ato,x
+        beq     mr_cr
+        jsr     sccput          ; sccput preserves X
+        inx
+        bne     mr_snd
+mr_cr:  lda     #$0D
+        jsr     sccput
+        ldx     #30             ; ~500ms (30 frames) for the modem to go on-line
+mr_w:   jsr     rb_poll         ; never go deaf: buffer the CONNECT reply/echo
+        jsr     vbl_edge        ; (also polls rb_poll internally)
+        dex
+        bne     mr_w
+        lda     rb_head         ; drop the CONNECT/echo so it can't leak in
+        sta     rb_tail
+        jmp     session_start
+
 ; dial_echo - print the modem's responses on row 22 during the dial,
 ; gray, one line at a time (CR clears the row). Diagnosis beats a
 ; spinner when a dial goes sideways in the field.
@@ -1225,6 +1252,9 @@ db_x:   rts
 
 dial_str:
         .byte   "ATDS=0",0
+
+str_ato:
+        .byte   "ATO",0                  ; resume the data link on a skip-dial reconnect
 
 spin_glyphs:
         .byte   "*+:+"          ; pulse cycle for the thinking spinner

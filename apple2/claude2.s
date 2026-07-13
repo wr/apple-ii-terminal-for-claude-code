@@ -780,9 +780,9 @@ act_connect:
         bne     @nocar
         lda     dcd_trust
         beq     @dial0
-        lda     rb_head         ; carrier's still up: skip the redial,
-        sta     rb_tail         ; straight into the session
-        jmp     session_start
+        jmp     modem_resume    ; carrier's up, skip the redial - but the modem
+                                ; may have dropped to command mode on a reconnect,
+                                ; so resume the data link before the session opens
 @nocar: lda     #1              ; the pin can go high, so a low means a carrier
         sta     dcd_trust
 @dial0: lda     #RULE1
@@ -1002,6 +1002,30 @@ dial_byte:
 @nl:    lda     #0
         sta     mdm_c1
 @x:     rts
+
+; modem_resume - skip-dial reconnect path only. Carrier is up but a WiModem
+; that dropped to COMMAND mode after a Ctrl-C-to-menu would treat the auto-sent
+; device token as an AT command and echo it on its own screen instead of
+; passing it to the bridge (Bug F). Send ATO to resume the data link first.
+; Harmless if we were truly still in data mode: ATO goes out as data, and the
+; bridge already swallows a passed-through ATO line.
+modem_resume:
+        ldx     #0
+@snd:   lda     str_ato,x
+        beq     @cr
+        jsr     aciaput         ; aciaput preserves X
+        inx
+        bne     @snd
+@cr:    lda     #$0D
+        jsr     aciaput
+        ldx     #30             ; ~500ms (30 frames) for the modem to go on-line
+@w:     jsr     rb_poll         ; never go deaf: buffer the CONNECT reply/echo
+        jsr     frame_wait      ; (also polls rb_poll internally)
+        dex
+        bne     @w
+        lda     rb_head         ; drop the CONNECT/echo so it can't leak in
+        sta     rb_tail
+        jmp     session_start
 
 ; =====================================================================
 ; session
@@ -1740,6 +1764,7 @@ str_dial:   .byte "Dialing...",0
 str_nocarr: .byte "* connection lost - back to menu",0
 str_dfail:  .byte "Dial failed - try the modem console",0
 str_atd:    .byte "ATDS=0",0
+str_ato:    .byte "ATO",0                 ; resume the data link on a skip-dial reconnect
 str_quit:   .byte "/quit"
 str_exit:   .byte "/exit"
 str_gs:     .byte "THIS IS THE 8-BIT CLIENT - ON A IIGS RUN: BRUN COBJ",$0D,0
