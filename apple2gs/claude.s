@@ -736,6 +736,7 @@ mn_spin:
         jsr     send_line
         jsr     spinner
         jsr     recv_reply
+        jsr     token_flush     ; deferred token write, now that the bridge is idle
         jsr     bell_maybe      ; BEL semantics: ring once after a long think
         lda     quitflag        ; bridge sent CMD_QUIT during this reply?
         beq     main
@@ -1987,9 +1988,30 @@ dt_ck2: cpy     TOKBUF+6
         bne     dt_ck2
 dt_ckd: ldy     TOKBUF+6
         sta     TOKBUF+7,y      ; store checksum at index 7+len
-        jsr     token_write     ; exits .a16/.i16; ignore carry (write-protect = no persist)
+        lda     #1              ; DEFER the RWTS write: doing it here (inside
+        sta     token_pending   ; recv_reply) would go deaf ~150ms and drop the
+                                ; trailing EOT. token_flush writes it at idle.
+        rep     #$30            ; restore do_token's .a16/.i16 exit contract
         .a16
         .i16
+        rts
+
+; token_flush - perform the deferred token write. Called from the main loop
+; right after recv_reply, when the bridge is silent (waiting for the user's
+; next line), so the RWTS deaf window can't eat any serial. Enters .a8/.i8 and
+; MUST exit .a8/.i8 for the code after it; token_write does its own sep/rep and
+; returns .a16/.i16, so we sep back down before returning.
+token_flush:
+        lda     token_pending
+        beq     tf_done         ; nothing pending: return .a8/.i8, width untouched
+        jsr     token_write     ; RWTS write; ignore carry; returns .a16/.i16
+        .a16
+        .i16
+        sep     #$30            ; back to the caller's .a8/.i8
+        .a8
+        .i8
+        stz     token_pending
+tf_done:
         rts
 
 tok_magic:  .byte   "CLDTK1"
@@ -3002,6 +3024,7 @@ dialres:    .res 1          ; dial window: 0 silence, 1 CONNECT, 2 failure
 dcd_active: .res 1          ; nonzero if DCD was asserted at session start
 dcd_trust:  .res 1          ; DCD has read "no carrier" once: the pin is live
 muteflag:   .res 1          ; Ctrl-C during recv_reply: drain without drawing
+token_pending: .res 1       ; do_token framed a token: token_flush writes it at idle
 mdm_c1:     .res 1          ; dial window: first char of current rx line
 dcol:       .res 1          ; dial window: echo column on row 22
 mus_cd0:    .res 1          ; voice 0: vblanks left on current note

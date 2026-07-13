@@ -1093,6 +1093,7 @@ main:
 @spin:  jsr     send_line
         jsr     spinner
         jsr     recv_reply
+        jsr     token_flush     ; deferred token write, now that the bridge is idle
         jsr     bell_maybe      ; BEL semantics: ring once after a long think
         lda     quitflag
         beq     main
@@ -1641,12 +1642,24 @@ do_token:
         bne     @ck2
 @ckdone:ldy     TOKBUF+6
         sta     TOKBUF+7,y      ; store checksum at index 7+len
-        ; token_write's RWTS call is deaf; that's safe ONLY because at this
-        ; point the bridge has just the trailing EOT in flight (the real
-        ; session header is delayed behind backend.prime()). A future change to
-        ; the bridge's post-pairing send order must preserve that ordering.
-        jsr     token_write     ; ignore carry: write-protect = no persist
+        ; DEFER the RWTS write. Doing it here (inside recv_reply) goes deaf for
+        ; ~150ms and drops the trailing EOT the bridge sends right after the
+        ; token - recv_reply then hangs forever. token_flush writes it from the
+        ; main loop, when the bridge is idle.
+        lda     #1
+        sta     token_pending
         rts
+
+; token_flush - perform the deferred token write. Called from the main loop
+; right after recv_reply, when the bridge is silent (waiting for the next
+; line), so the RWTS deaf window can't eat any serial.
+token_flush:
+        lda     token_pending
+        beq     @done           ; nothing pending
+        jsr     token_write     ; ignore carry: write-protect = no persist
+        lda     #0
+        sta     token_pending
+@done:  rts
 
 tok_magic:  .byte   "CLDTK1"
 
@@ -1774,6 +1787,7 @@ mdm_c1:     .res 1
 dcd_trust:  .res 1          ; DCD has read "no carrier" once: the pin is live
 dcd_active: .res 1          ; nonzero if DCD read carrier at session start
 muteflag:   .res 1          ; Ctrl-C during recv_reply: drain without drawing
+token_pending: .res 1       ; do_token framed a token: token_flush writes it at idle
 sp_ph:      .res 1
 sp_fr:      .res 2          ; spinner frames elapsed (~60/s): the bell gate
 wake_done:  .res 1          ; the wake gesture already greeted this boot
