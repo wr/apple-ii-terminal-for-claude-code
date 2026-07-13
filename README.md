@@ -8,18 +8,18 @@ Boot a 140K floppy, dial a WiFi modem, and your Apple II becomes a terminal for 
 
 It's not a chat toy. The backend is the actual agentic Claude Code, and the clients are bare-metal 65816 and 6502 that draw the whole UI themselves from a tiny 7-bit ASCII protocol. A IIgs gets a Super Hi-Res client with an animated splash, scrolling transcript, and thinking spinner; a IIe, IIc, IIc Plus, or II+ gets a text-mode client.
 
-Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones that spell C-L-A-U-D-E on the keypad, ring, and answer tone.
+Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones that spell `C-L-A-U-D-E` on the keypad, ring, and answer tone.
 
 ## Apple II instructions
 
-**Prerequisites:**
+### Prerequisites:
 
 1. An Apple II
-2. A Hayes-compatible modem (or modem emulator like the WiModem 232 Pro) OR a serial connection to your modern Mac.
-3. FloppyEmu or some way of writing a `.dsk` image to a floppy disk
-4. [`claude` CLI](https://claude.com/claude-code) installed and logged in on your modern Mac
+2. A Hayes-compatible modem (or modem emulator like the [WiModem 232 Pro](https://www.cbmstuff.com/index.php?route=product/product&path=59_66&product_id=113)) OR a serial connection to your modern Mac.
+3. [FloppyEmu](https://www.bigmessowires.com/floppy-emu/) or some way of writing a `.dsk` image to a floppy disk
+4. [Claude Code](https://claude.com/claude-code) installed and logged in on your modern Mac
 
-**Setup:**
+### Setup:
 
 1. **Bridge**, on the machine with the `claude` CLI:
 
@@ -52,7 +52,7 @@ To update later, download the new release image and re-run `install-sd.sh`; it o
 
 ## Emulator instructions
 
-You need [KEGS](https://kegs.sourceforge.net/), Python 3 (stock, no pip or venv), and the [`claude` CLI](https://claude.com/claude-code) logged in.
+I used [KEGS](https://kegs.sourceforge.net/), but any Apple II emulator should work.
 
 1. Download **CLAUDE.dsk** from [Releases](https://github.com/wr/apple-ii-terminal-for-claude-code/releases).
 2. In KEGS, press **F4**: set **s6d1** to `CLAUDE.dsk`, and set Serial Port **Slot 2** to **Incoming** (KEGS then listens on TCP 6502).
@@ -151,8 +151,9 @@ The 8-bit client has its own harness: MAME with an emulated Super Serial Card ma
 
 This project is not affiliated with or endorsed by Anthropic. This is a fan project that gives their excellent CLI a 1986 terminal for fun. "Claude" and the Clawd mascot are Anthropic's.
 
-**Font:** [unscii](http://viznut.fi/unscii/) (CC0). Disk tooling: [dos33fsprogs](https://github.com/deater/dos33fsprogs) by Vince Weaver. Emulator: [KEGS](https://kegs.sourceforge.net/).
-
-And the Apple II community, who kept all of this alive for forty years <3
+- **Font:** [unscii](http://viznut.fi/unscii/) (CC0)
+- **Disk tooling:** [dos33fsprogs](https://github.com/deater/dos33fsprogs) by Vince Weaver.
+- **Emulator:** [KEGS](https://kegs.sourceforge.net/).
+- The Apple II community... Apple II forever!
 
 MIT license, covering this project's own code only. The build and the release disk also include third-party material (Apple's DOS 3.3, the Clawd art, the unscii font); provenance and status for each is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
