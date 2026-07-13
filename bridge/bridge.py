@@ -375,29 +375,36 @@ class PairingManager:
         self.ttl = ttl_secs                 # 0 = the window never closes
         self.born = time.monotonic()
         self.store_path = store_path or _pairing_store()
-        self.paired = self._load()
+        self.devices = self._load()
         self._fails: dict = {}              # peer -> [count, locked_until]
 
     # -- persistence -------------------------------------------------------- #
-    def _load(self) -> set:
+    def _load(self) -> list:
         try:
             with open(self.store_path) as f:
-                return set(json.load(f))
+                data = json.load(f)
         except (OSError, ValueError):
-            return set()
+            return []
+        if isinstance(data, dict) and data.get("v") == 2:
+            devs = data.get("devices")
+            return devs if isinstance(devs, list) else []
+        return []  # legacy v1 (an IP list) or anything unknown: never trusted
 
     def _save(self) -> None:
         try:
-            os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
-            with open(self.store_path, "w") as f:
-                json.dump(sorted(self.paired), f)
+            os.makedirs(os.path.dirname(self.store_path), mode=0o700, exist_ok=True)
+            tmp = self.store_path + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({"v": 2, "devices": self.devices}, f)
+            os.replace(tmp, self.store_path)
         except OSError as exc:
             log(f"pairing: could not persist ({exc})")
 
     def clear_paired(self) -> int:
-        """Revoke every remembered peer. Returns how many were dropped."""
-        n = len(self.paired)
-        self.paired = set()
+        """Revoke every remembered device. Returns how many were dropped."""
+        n = len(self.devices)
+        self.devices = []
         self._save()
         return n
 

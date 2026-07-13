@@ -346,5 +346,38 @@ def test_token_hash_is_sha256_hex():
     assert token_hash("ABCDEF") != token_hash("ABCDEG")
 
 
+import json, os, stat
+from bridge import PairingManager
+
+
+def test_v2_store_roundtrip_and_perms(tmp_path):
+    store = tmp_path / "paired.json"
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(store))
+    pm.devices.append({"token_sha256": "a" * 64,
+                       "first_ip": "10.0.0.5", "paired_at": 1000})
+    pm._save()
+    data = json.loads(store.read_text())
+    assert data["v"] == 2
+    assert data["devices"][0]["token_sha256"] == "a" * 64
+    assert stat.S_IMODE(os.stat(store).st_mode) == 0o600
+
+
+def test_legacy_v1_ip_list_is_ignored(tmp_path):
+    store = tmp_path / "paired.json"
+    store.write_text(json.dumps(["10.0.1.117", "127.0.0.1"]))  # old shape
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(store))
+    assert pm.devices == []  # legacy IPs never trusted
+
+
+def test_clear_paired_counts_and_empties(tmp_path):
+    store = tmp_path / "paired.json"
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(store))
+    pm.devices = [{"token_sha256": "b" * 64, "first_ip": "x", "paired_at": 1}]
+    pm._save()
+    assert pm.clear_paired() == 1
+    assert pm.devices == []
+    assert json.loads(store.read_text())["devices"] == []
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
