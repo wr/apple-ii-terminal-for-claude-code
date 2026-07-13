@@ -328,5 +328,23 @@ class TestInputBound(unittest.TestCase):
         self.assertEqual(box["line"], "hello claude")
 
 
+import re
+from bridge import gen_token, token_hash
+
+
+def test_gen_token_shape():
+    t = gen_token()
+    assert len(t) == 32
+    assert re.fullmatch(r"[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{32}", t)
+    assert gen_token() != gen_token()  # not constant
+
+
+def test_token_hash_is_sha256_hex():
+    h = token_hash("ABCDEF")
+    assert re.fullmatch(r"[0-9a-f]{64}", h)
+    assert token_hash("ABCDEF") == token_hash("ABCDEF")
+    assert token_hash("ABCDEF") != token_hash("ABCDEG")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -22,6 +22,7 @@ Type `/help` on the Apple II once connected.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import queue
@@ -333,6 +334,18 @@ _PAIR_LEN = 6
 def gen_pair_code(n: int = _PAIR_LEN) -> str:
     import secrets
     return "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(n))
+
+
+_TOKEN_LEN = 32  # 32 * ~4.95 bits ~= 158 bits of entropy
+
+
+def gen_token(n: int = _TOKEN_LEN) -> str:
+    import secrets
+    return "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(n))
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
 class PairingManager:
