@@ -1020,17 +1020,23 @@ session_start:
         and     #$20            ; means gate future sends on it dropping;
         eor     #$20            ; no carrier (KEGS / a DCD-less modem) means
         sta     dcd_active      ; don't gate - never block those
-        lda     #$0D            ; session-open probe: bridge answers with
-        jsr     aciaput         ; the header (or the LOCKED notice)
-        ; auto-pair: if the reserved sector holds a valid token, present it
-        ; as the first line so a paired device skips the code prompt. A fresh
-        ; (zero-filled) sector, a read error, or write-protection all fall
-        ; through silently to the normal LOCKED code prompt.
+        ; auto-pair vs. bare probe. Do the RWTS token read FIRST, while the
+        ; bridge is still SILENT (require_pairing pushes nothing until it reads
+        ; a line from us). If we probed first, the bridge's synchronous
+        ; LOCKED-header reply would land during the ~100-200ms deaf RWTS read
+        ; and the 6551's one-byte latch would drop it on real hardware - the
+        ; user would never see the prompt, and a partial header could hang
+        ; do_header. token_read returns its result in carry and tok_valid in Z;
+        ; aciaput and lda both CLOBBER those flags, so we consume them to pick
+        ; the branch BEFORE any transmit, and each case sends exactly once.
         jsr     tok_init_dev
         jsr     token_read
-        bcs     @notok          ; RWTS read failed: skip
+        bcs     @probe          ; RWTS read failed: bare probe
         jsr     tok_valid
-        bne     @notok          ; no valid token on disk: skip
+        bne     @probe          ; no/invalid token on disk: bare probe
+        ; valid token: present it as the FIRST line the bridge reads, so a
+        ; paired device skips the code prompt. The bridge answers with EOT +
+        ; the real header - no separate bare-CR probe needed.
         ldx     #0
 @snd:   cpx     TOKBUF+6        ; +6 = stored token length
         beq     @sndcr
@@ -1040,7 +1046,10 @@ session_start:
         bne     @snd            ; len < 40, so X never wraps
 @sndcr: lda     #$0D
         jsr     aciaput
-@notok:
+        jmp     @afterprobe
+@probe: lda     #$0D            ; session-open probe: bridge answers with the
+        jsr     aciaput         ; LOCKED header (fresh/errored/unpaired disk)
+@afterprobe:
 main:
         jsr     draw_box
         jsr     read_line
@@ -1569,6 +1578,10 @@ tok_valid:
         cpx     #6
         bne     @m
         lda     TOKBUF+6        ; len
+        beq     @bad            ; len 0 = invalid
+        cmp     #$29            ; > 40 ($28) = corrupt over-read; bound it
+        bcs     @bad            ; (do_token caps writes at 40, so a good len
+                                ;  is 1..40 - anything else is a bad sector)
         sta     $06             ; scratch (ptr lo; dead here, reloaded on draw)
         lda     #0
         ldx     #0
@@ -1628,6 +1641,10 @@ do_token:
         bne     @ck2
 @ckdone:ldy     TOKBUF+6
         sta     TOKBUF+7,y      ; store checksum at index 7+len
+        ; token_write's RWTS call is deaf; that's safe ONLY because at this
+        ; point the bridge has just the trailing EOT in flight (the real
+        ; session header is delayed behind backend.prime()). A future change to
+        ; the bridge's post-pairing send order must preserve that ordering.
         jsr     token_write     ; ignore carry: write-protect = no persist
         rts
 
