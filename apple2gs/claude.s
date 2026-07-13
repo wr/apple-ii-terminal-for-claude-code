@@ -62,6 +62,16 @@ CMD_BULLET = $02       ; in-band: draw the white reply bullet here
 CMD_QUIT   = $03       ; in-band: bridge says session over -> back to the menu
 CMD_HEADER = $0E       ; in-band: header frame follows (title CR subtitle CR)
 
+; ---- token sector (device pairing): RWTS a reserved sector on the boot disk.
+;   RWTS is 8-bit DOS code (never touches M/X or the e-bit), so the token
+;   helpers run in native 8-bit mode (sep #$30). Entry $BD00, the IOB/DCT
+;   bytes, and the boot slot/drive at $B7E9/$B7EA are identical to the 8-bit
+;   client (verified against Beneath Apple DOS) - do NOT change them.
+TOKBUF     = $9000     ; sector buffer (the free $9000-$95FF gap above the code)
+RWTS       = $BD00     ; DOS 3.3 RWTS entry (A=lo/Y=hi -> IOB)
+TOKTRK     = $12       ; reserved token track
+TOKSEC     = $0F       ; reserved token sector
+
 ; ---- scrollback ring buffer (bank $02): each line = 80 cells of (char,color) ----
 BUF_BANK   = $02
 BUF_LINES  = 128
@@ -1776,6 +1786,139 @@ check_incoming:
         jsr     do_header
 ci_x:
         rts
+
+; =====================================================================
+; token sector I/O - RWTS-read/write a reserved sector (T=$12 S=$0F) on the
+; boot disk to persist a device-pairing token across reboots. RWTS is a
+; monolithic 8-bit DOS routine (6502 opcodes; it never runs rep/sep, so M/X
+; stay 8-bit across it) - we enter these helpers in native 8-bit mode
+; (sep #$30) and rep #$30 back to the client's 16-bit convention before rts,
+; per the 65816 width rule. The only unavoidably-deaf stretch is inside RWTS
+; itself, which can't be woven with rb_poll - see the report caveat.
+; Sector layout: magic "CLDTK1"(6) | len(1) | token(len) | csum(1).
+; csum = 8-bit sum (mod 256) of bytes [0 .. 6+len]. Byte-identical to the
+; 8-bit client so a token is portable between clients.
+; =====================================================================
+
+; Copy the boot slot/drive out of DOS's own primary IOB ($B7E9/$B7EA) so token
+; I/O targets the same physical device the client booted from. Exits .a16/.i16.
+tok_init_dev:
+        sep     #$30
+        .a8
+        .i8
+        lda     $B7E9           ; DOS boot slot (slot*16)
+        sta     iob_slot
+        lda     $B7EA           ; DOS boot drive
+        sta     iob_drive
+        rep     #$30
+        .a16
+        .i16
+        rts
+
+; RWTS-read the token sector into TOKBUF. Carry clear = success. Exits .a16/.i16.
+token_read:
+        sep     #$30
+        .a8
+        .i8
+        lda     #TOKTRK
+        sta     iob_trk
+        lda     #TOKSEC
+        sta     iob_sec
+        lda     #$01            ; command 1 = read
+        sta     iob_cmd
+        bra     rwts_call
+
+; RWTS-write TOKBUF to the token sector. Carry clear = success. Exits .a16/.i16.
+token_write:
+        sep     #$30
+        .a8
+        .i8
+        lda     #TOKTRK
+        sta     iob_trk
+        lda     #TOKSEC
+        sta     iob_sec
+        lda     #$02            ; command 2 = write
+        sta     iob_cmd
+        ; fall through (still .a8/.i8)
+rwts_call:
+        lda     #<iob
+        ldy     #>iob           ; A=lo/Y=hi -> IOB, per DOS 3.3 RWTS
+        jsr     RWTS            ; 6502 code: returns with M/X still 8-bit
+        lda     iob_err         ; Z=1 if ok (0 = no error)
+        rep     #$30            ; rep preserves Z from the lda above
+        .a16
+        .i16
+        beq     rc_ok
+        sec
+        rts
+rc_ok:  clc
+        rts
+
+; tok_valid - after token_read, returns Z=1 (A=0) if TOKBUF holds valid magic
+; and a matching checksum; Z=0 (A=1) otherwise. Uses $06 scratch. Exits .a16/.i16.
+tok_valid:
+        sep     #$30
+        .a8
+        .i8
+        ldx     #0
+tv_m:   lda     TOKBUF,x
+        cmp     tok_magic,x
+        bne     tv_bad
+        inx
+        cpx     #6
+        bne     tv_m
+        lda     TOKBUF+6        ; len
+        beq     tv_bad          ; len 0 = invalid
+        cmp     #$29            ; > 40 ($28) = corrupt over-read; bound it
+        bcs     tv_bad          ; (do_token caps writes at 40)
+        sta     $06             ; scratch (known-safe ZP; = tmp2, dead here)
+        lda     #0
+        ldx     #0
+tv_s:   clc
+        adc     TOKBUF,x        ; sum magic+len: indices 0..6
+        inx
+        cpx     #7
+        bcc     tv_s
+        ldy     #0
+tv_t:   cpy     $06             ; summed all len token bytes?
+        beq     tv_done
+        clc
+        adc     TOKBUF+7,y      ; sum token: indices 7..6+len
+        iny
+        bne     tv_t
+tv_done:
+        ldy     $06
+        cmp     TOKBUF+7,y      ; compare to checksum byte at index 7+len
+        bne     tv_bad
+        lda     #0              ; Z=1: valid
+        bra     tv_exit
+tv_bad: lda     #1              ; Z=0: invalid
+tv_exit:
+        rep     #$30            ; rep preserves Z from the lda above
+        .a16
+        .i16
+        rts
+
+tok_magic:  .byte   "CLDTK1"
+
+; DOS 3.3 RWTS IOB (17 bytes) + DCT. Slot/drive are patched from DOS's own
+; boot IOB by tok_init_dev. Layout per Beneath Apple DOS ch.6. This is data -
+; control never falls into it (do_token rts's above).
+iob:        .byte   $01         ; +0  IOB type ($01)
+iob_slot:   .byte   $60         ; +1  slot*16 (patched at boot)
+iob_drive:  .byte   $01         ; +2  drive (patched at boot)
+iob_vol:    .byte   $00         ; +3  volume expected (0 = any)
+iob_trk:    .byte   TOKTRK      ; +4  track
+iob_sec:    .byte   TOKSEC      ; +5  sector
+            .word   dct         ; +6  DCT pointer
+            .word   TOKBUF      ; +8  data buffer
+            .word   $0000       ; +10 unused
+iob_cmd:    .byte   $01         ; +12 command 1=read 2=write
+iob_err:    .byte   $00         ; +13 error code (return)
+            .byte   $00         ; +14 last volume (return)
+            .byte   $60         ; +15 last slot (return)
+            .byte   $01         ; +16 last drive (return)
+dct:        .byte   $00,$01,$EF,$D8  ; device characteristics table
 
 ; =====================================================================
 ; cout - print A with cursor handling; CR = newline+scroll
