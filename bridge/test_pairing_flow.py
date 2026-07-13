@@ -1,3 +1,4 @@
+import time
 import types
 from bridge import PairingManager, require_pairing, CMD_TOKEN
 
@@ -57,4 +58,16 @@ def test_first_run_code_issues_token_frame(tmp_path):
 def test_wrong_token_falls_through_to_code(tmp_path):
     pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
     term = _FakeTerm(["ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", "ABC123"])
+    assert require_pairing(term, _args(), pm) is True
+
+
+def test_valid_token_pairs_after_window_closes(tmp_path):
+    # A previously-paired device presenting its stored token must still get
+    # in after the pairing window has expired - the window only gates NEW
+    # (code-based) pairing, never token presentation.
+    pm = PairingManager("ABC123", ttl_secs=60, store_path=str(tmp_path / "p.json"))
+    tok = pm.issue_token("10.0.0.5")
+    pm.born = time.monotonic() - 3600   # force the window closed
+    assert pm.window_open() is False
+    term = _FakeTerm([tok])
     assert require_pairing(term, _args(), pm) is True

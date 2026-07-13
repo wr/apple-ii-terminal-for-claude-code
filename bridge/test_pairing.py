@@ -267,12 +267,13 @@ class TestRequirePairing(unittest.TestCase):
             os.path.exists(path) and os.unlink(path)
 
     def test_window_closed_refuses(self):
+        # The window only gates NEW (code-based) pairing, so the refusal is
+        # now reactive: it fires only once a real (non-token) line arrives.
         pm, path = make_pm("ABC234", ttl_secs=60)
         try:
             pm.born = time.monotonic() - 61
-            ch = FakeChannel()
-            term = Terminal(ch, TermConfig(width=80, echo=False, telnet=False))
-            self.assertFalse(bridge.require_pairing(term, Args(), pm))
+            r, ch = run_pairing(pm, feed=b"NOTATOKEN\r")
+            self.assertFalse(r)
             self.assertIn(b"PAIRING CLOSED", ch.out())
         finally:
             os.path.exists(path) and os.unlink(path)

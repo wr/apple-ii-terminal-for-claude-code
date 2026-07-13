@@ -474,16 +474,6 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
     """Gate a listening bridge behind the manager's code. Returns False if the
     caller hung up, was locked out, or the pairing window had already closed."""
     peer = getattr(term.ch, "peer", None)
-    if not pm.window_open():
-        log(f"pairing: window closed; refusing new device {peer}")
-        if args.app:
-            _lock_header(term, ("Terminal for Claude Code",
-                                "PAIRING CLOSED - restart the bridge",
-                                "to enroll a new device"))
-            term.write(EOT)
-        else:
-            term.write_line("Pairing window closed - restart the bridge.")
-        return False
     log(f"pairing: waiting for code from {peer} (code: {pm.code})")
     # Don't push the prompt proactively: on a native client the connect
     # happens while the user is still on the boot menu, whose buffer drain
@@ -517,6 +507,16 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             else:
                 term.write_line("Paired - go ahead.")
             return True
+        if not pm.window_open():   # window gates NEW (code) pairing only
+            log(f"pairing: window closed; refusing new device {peer}")
+            if args.app:
+                _lock_header(term, ("Terminal for Claude Code",
+                                    "PAIRING CLOSED - restart the bridge",
+                                    "to enroll a new device"))
+                term.write(EOT)
+            else:
+                term.write_line("Pairing window closed - restart the bridge.")
+            return False
         if pm.exhausted(peer):
             log(f"pairing: {peer} hit the guess cap - locked out")
             term.write_line("Too many wrong codes. Restart the bridge to retry.")
