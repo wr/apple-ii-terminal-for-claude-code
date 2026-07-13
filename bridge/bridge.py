@@ -541,6 +541,23 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             else:
                 term.write_line("Pairing window closed - restart the bridge.")
             return False
+        if _looks_like_token(line):
+            # The client auto-sends its stored token as the first line on every
+            # connect. When it doesn't match (revoked via --clear-paired, a
+            # different bridge, a stale disk) DON'T count it as a wrong-CODE
+            # guess: the client is idle in its main loop and only renders header
+            # frames, so a plain "wrong code" line is invisible. Push the LOCKED
+            # prompt (a header frame) so the user can type the code, no strike.
+            log(f"pairing: {peer} sent an unrecognized token - prompting for code")
+            if args.app:
+                _lock_header(term, ("Terminal for Claude Code",
+                                    "LOCKED - type the pairing code",
+                                    "(it's on the bridge console)"))
+                term.write(EOT)
+            else:
+                term.write_line("Unrecognized device. Type the pairing code.")
+            prompted = True
+            continue
         if pm.exhausted(peer):
             log(f"pairing: {peer} hit the guess cap - locked out")
             term.write_line("Too many wrong codes. Restart the bridge to retry.")

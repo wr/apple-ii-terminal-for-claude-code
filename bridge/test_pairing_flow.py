@@ -137,3 +137,17 @@ def test_run_app_session_swallows_token_on_live_reconnect():
         f"a reconnect token leaked to the backend: {backend.prompts!r}")
     # the swallow path writes an EOT so the reconnected client isn't left waiting
     assert term.written.count(EOT[0]) >= 1
+
+
+def test_stale_token_prompts_for_code_without_strike(tmp_path):
+    # Bug D: after --clear-paired the client still auto-sends its old token as
+    # the first line. The bridge doesn't recognize it - but must NOT count it
+    # as a wrong-code strike (the idle client can't see plain text); it must
+    # push the LOCKED header prompt so the user can type the code.
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    stale = gen_token()  # a token pm has never issued
+    term = _FakeTerm([stale, "ABC123"])  # stale token, then the real code
+    assert require_pairing(term, _args(), pm) is True
+    assert pm._fails.get("10.0.0.5") is None            # no strike burned
+    assert 0x0E in term.written                          # LOCKED header pushed
+    assert bytes(CMD_TOKEN) in term.written              # fresh token issued
