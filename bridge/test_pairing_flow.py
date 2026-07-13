@@ -1,6 +1,6 @@
 import time
 import types
-from bridge import (PairingManager, require_pairing, CMD_TOKEN,
+from bridge import (PairingManager, require_pairing, CMD_TOKEN, EOT,
                      run_app_session, _looks_like_token, gen_token, _TOKEN_LEN)
 
 
@@ -122,13 +122,18 @@ def test_run_app_session_swallows_stale_token_on_ungated_transport():
         f"stale token leaked through to the backend: {backend.prompts!r}")
 
 
-def test_run_app_session_does_not_swallow_token_shaped_line_mid_session():
-    # Once the session is no longer "fresh", a message that happens to be
-    # 32 token-alphabet characters is a legitimate prompt and must go through.
+def test_run_app_session_swallows_token_on_live_reconnect():
+    # Bug C: the WiModem keeps the TCP link up across a client Ctrl-C -> menu
+    # -> Connect, so the bridge stays mid-session (fresh is already False)
+    # while the client re-runs session_start and auto-sends its stored token.
+    # That token line must be swallowed (and the header re-sent, since the
+    # client cleared its screen) - never forwarded to Claude as a prompt.
     tok = gen_token()
-    term = _FakeTerm(["hello", tok, None])
+    term = _FakeTerm(["hello", tok, "world", None])
     backend = _FakeBackend()
     args = _args(cols=80)
     run_app_session(term, args, backend, None, "code")
-    assert backend.prompts == ["hello", tok], (
-        f"a mid-session token-shaped line was wrongly swallowed: {backend.prompts!r}")
+    assert backend.prompts == ["hello", "world"], (
+        f"a reconnect token leaked to the backend: {backend.prompts!r}")
+    # the swallow path writes an EOT so the reconnected client isn't left waiting
+    assert term.written.count(EOT[0]) >= 1
