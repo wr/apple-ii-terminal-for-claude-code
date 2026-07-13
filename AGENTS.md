@@ -44,7 +44,7 @@ python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
 - `--app` enables the native-client protocol (bridge stays silent, frames replies with `EOT` = `0x04`). Required for both native clients.
 - `--backend code` runs the real `claude` CLI on the host; `--backend chat` (default) is Messages-API Q&A.
 - Serial hardware instead of KEGS: `--serial /dev/tty.usbserial-XXXX --baud 9600`.
-- A listening bridge (`--telnet`) locks itself behind a 6-character pairing code (attempt backoff, expiry, revocation); paired peers persist in `~/.config/claude-ii-terminal/paired.json`. `--no-pair` disables.
+- A listening bridge (`--telnet`) locks itself behind a 6-character pairing code (attempt backoff, expiry, revocation). Trust is a client-held device token, not a peer IP: a correct code mints a 32-char token (issued once, in `--app` mode, via a `CMD_TOKEN` frame), and only its SHA-256 hash persists in `~/.config/claude-ii-terminal/paired.json` — presenting that token as the session's first line pairs a reconnect without re-asking for the code. `--no-pair` disables.
 
 ## The edit → see-it loop
 
@@ -68,6 +68,7 @@ The reply stream carries a few control bytes the native clients interpret (kept 
 - `0x02` — draw the reply bullet.
 - `0x03` — session over (bridge-side `/quit`): the client returns to its menu.
 - `0x0E` — header frame follows (3 CR-terminated lines); sent in reply to the client's session-open CR probe and before each reply. An **unpaired** peer's probe is answered with a LOCKED header instead — that's how the pairing prompt reaches the screen (idle clients discard unsolicited text but always render headers).
+- `0x05 <token> CR` — (bridge → client, app mode) a freshly issued device token; the native client writes it to a reserved disk sector and auto-sends it as its first line on every future connect, so pairing survives reboots. `to_ascii` drops 0x05 from model text, so a reply can't forge it.
 
 These are injected in `bridge.py:run_app_session` (bullet, footer) and inside `render.py` (inline/fenced `code` spans → white). `to_ascii` deliberately **passes through bytes 1–3** rather than dropping them; the clients' `recv_reply`/`spinner` intercept them before `cout`. Color markers currently count toward wrap width, so code-dense lines may wrap a few columns early.
 
