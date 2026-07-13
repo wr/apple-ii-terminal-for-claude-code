@@ -26,9 +26,15 @@ hasn't given.
 - License / status: Apple's copyrighted operating system. Apple has never
   placed DOS 3.3 in the public domain or issued a redistribution license. It
   is distributed widely across the retrocomputing community by convention,
-  not by permission.
-- In repo: no (excluded by the `apple2gs/*.dsk` line in `.gitignore`).
-- In release: yes, indirectly. `apple2gs/build.sh` copies this master, replaces
+  not by permission — the same January 1983 System Master is bundled by the
+  AppleWin emulator and hosted openly by the Internet Archive and the Asimov
+  archive. It is vendored here in good faith for interoperability and
+  preservation, with no claim of ownership and no affiliation with Apple, and
+  will be removed on a rights holder's request.
+- In repo: yes, vendored at `apple2gs/dos33-master-jan83.dsk` (the
+  `apple2gs/*.dsk` gitignore has an explicit `!` exception for it, so build
+  outputs stay ignored while the base image is tracked).
+- In release: yes. `apple2gs/build.sh` copies this master, replaces
   its `HELLO` program, and injects the two client binaries (`COBJ`, `COBJ8`) to
   produce `CLAUDE.dsk`. The DOS 3.3 boot code and file system in `CLAUDE.dsk`
   are Apple's. The GitHub release ships `CLAUDE.dsk`.

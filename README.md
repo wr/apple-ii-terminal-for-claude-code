@@ -171,17 +171,17 @@ python3 preview.py assets.inc out.png     # render the SHR screen, no emulator
 
 `build.sh` starts from a pristine Apple DOS 3.3 System Master and injects both
 clients plus a machine-detecting HELLO; that master-based image is the one
-proven to boot KEGS, FloppyEmu, and real drives alike. The master isn't in the
-repo (it's Apple's OS). Drop it at `apple2gs/dos33-master-jan83.dsk` and verify
-it:
+proven to boot KEGS, FloppyEmu, and real drives alike. The master is vendored at
+`apple2gs/dos33-master-jan83.dsk` (the January 1983 System Master, 143,360
+bytes), so a clean checkout builds with nothing to fetch. It's Apple's OS, not
+ours; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Verify it:
 
 ```sh
 shasum -a 256 apple2gs/dos33-master-jan83.dsk
 # 70986935d95c4a918852700364ac107607eb861a7d93a69c2b5caf44a696b17a
 ```
 
-That hash pins the January 1983 System Master (143,360 bytes) and reproduces the
-released disk byte-for-byte; other dumps still build. Everything else is
+Everything else is
 generated at build time: the font from [unscii](http://viznut.fi/unscii/), the
 splash animation machine-ported from a gif, the sounds from tone tables in
 `gen_assets.py`. Provenance for the bundled material is in

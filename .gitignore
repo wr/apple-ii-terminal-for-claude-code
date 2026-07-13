@@ -12,6 +12,8 @@ apple2gs/hello.bas
 apple2gs/HH
 apple2gs/HELLO.tok
 apple2gs/*.dsk
+# vendored base image, not a build output — keep it tracked
+!apple2gs/dos33-master-jan83.dsk
 apple2/claude2.o
 apple2/COBJ8
 apple2gs/COBJ8
