@@ -234,8 +234,14 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
         if pair_via == "code":
             # Paired via a typed code: the client is still in recv_reply reading
             # the reply, and require_pairing sent the token frame WITHOUT an EOT.
-            # Terminate it here, AFTER the header - so the client renders the
-            # version string before its deferred token write goes deaf.
+            # Send the header (version string, drawn in the fixed slot) AND an
+            # explicit confirmation as transcript text - the latter renders via
+            # the client's cout, so the user gets a clear "you paired" line, not
+            # just a header refresh. All of this lands before the terminating
+            # EOT (and thus before the deferred token write goes deaf).
+            term.write(b"\x01\x02")  # coral
+            term.write_line("Paired! Type a message to begin.")
+            term.write(b"\x01\x01")  # back to gray
             term.write(EOT)
     fresh = True  # no real user input yet: modem chatter is still expected
     while not term.closed:

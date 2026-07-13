@@ -179,3 +179,4 @@ def test_run_app_session_code_pairing_sends_header_before_eot():
     assert 0x0E in w                       # header frame written
     assert EOT[0] in w                     # terminated
     assert w.index(0x0E) < w.index(EOT[0]) # header BEFORE the terminating EOT
+    assert any("Paired" in ln for ln in term.lines_out)  # explicit confirmation text
