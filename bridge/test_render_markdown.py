@@ -82,3 +82,19 @@ def run():
 if __name__ == "__main__":
     run()
     print("ALL PASS")
+
+
+from render import StreamFormatter
+
+
+def test_model_control_bytes_are_stripped():
+    fmt = StreamFormatter(80)
+    out = fmt.feed("hello\x03world\x01\x02 there\n")
+    line = out[0]
+    # No raw quit/color/bullet bytes may survive into a display line.
+    assert "\x03" not in line
+    assert "\x02" not in line
+    # Bridge-injected color markers are added later by _inline, not here,
+    # so a plain line carries none.
+    assert "\x01" not in line
+    assert "helloworld there" in line
