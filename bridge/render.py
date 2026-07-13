@@ -168,6 +168,10 @@ class StreamFormatter:
     def _transform(self, line: str) -> str | None:
         """One source line of Markdown -> one plain line (or None to drop it)."""
         line = line.rstrip("\r")
+        # Model text must not carry the in-band control bytes the client acts
+        # on; to_ascii passes 0x01-0x03 through, so strip them here BEFORE we
+        # inject our own color markers. 0x04/0x0E are already dropped downstream.
+        line = line.translate({1: None, 2: None, 3: None})
 
         if line.lstrip().startswith("```"):
             self._in_fence = not self._in_fence
