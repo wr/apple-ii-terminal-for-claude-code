@@ -60,6 +60,7 @@ EOT        = $04
 CMD_COLOR  = $01
 CMD_BULLET = $02
 CMD_QUIT   = $03
+CMD_TOKEN  = $05        ; app mode: bridge issues a device token; we store it
 CMD_HEADER = $0E
 
 ; ---- layout (matches the GS client's shape)
@@ -1021,6 +1022,25 @@ session_start:
         sta     dcd_active      ; don't gate - never block those
         lda     #$0D            ; session-open probe: bridge answers with
         jsr     aciaput         ; the header (or the LOCKED notice)
+        ; auto-pair: if the reserved sector holds a valid token, present it
+        ; as the first line so a paired device skips the code prompt. A fresh
+        ; (zero-filled) sector, a read error, or write-protection all fall
+        ; through silently to the normal LOCKED code prompt.
+        jsr     tok_init_dev
+        jsr     token_read
+        bcs     @notok          ; RWTS read failed: skip
+        jsr     tok_valid
+        bne     @notok          ; no valid token on disk: skip
+        ldx     #0
+@snd:   cpx     TOKBUF+6        ; +6 = stored token length
+        beq     @sndcr
+        lda     TOKBUF+7,x      ; token bytes live at +7..
+        jsr     aciaput
+        inx
+        bne     @snd            ; len < 40, so X never wraps
+@sndcr: lda     #$0D
+        jsr     aciaput
+@notok:
 main:
         jsr     draw_box
         jsr     read_line
@@ -1306,6 +1326,8 @@ spinner:
         beq     @stash
         cmp     #CMD_HEADER
         beq     @stash
+        cmp     #CMD_TOKEN      ; token frame can be the first byte back
+        beq     @stash          ; (issued right after a good code) - keep it
         cmp     #CMD_QUIT
         beq     @q
         cmp     #$20
@@ -1406,6 +1428,8 @@ recv_reply:
         beq     @bullet
         cmp     #CMD_HEADER
         beq     @hdr
+        cmp     #CMD_TOKEN
+        beq     @tok
         cmp     #CMD_QUIT
         beq     @rq
         cmp     #$0A
@@ -1426,9 +1450,11 @@ recv_reply:
         jmp     @next
 @hdr:   jsr     do_header
         jmp     @next
+@tok:   jsr     do_token        ; capture + persist a freshly issued token
+        jmp     @next
 @rq:    lda     #1
         sta     quitflag
-        bne     @next
+        jmp     @next
 @done:  lda     #$0D
         jsr     cout
         lda     #$0D
@@ -1564,6 +1590,45 @@ tok_valid:
         lda     #0              ; Z=1: valid
         rts
 @bad:   lda     #1              ; Z=0: invalid
+        rts
+
+; do_token - a CMD_TOKEN frame is arriving: read the CR-terminated token,
+; frame it into TOKBUF in the on-disk layout, and RWTS-write it. getbyte
+; polls rb_poll so the ring can't overflow while we read.
+do_token:
+        ldx     #0
+@wm:    lda     tok_magic,x     ; stamp the magic
+        sta     TOKBUF,x
+        inx
+        cpx     #6
+        bne     @wm
+        ldx     #0
+@rt:    jsr     getbyte
+        and     #$7F
+        cmp     #$0D
+        beq     @fin
+        sta     TOKBUF+7,x
+        inx
+        cpx     #$28            ; hard cap 40 (token is 32) - never overrun
+        bcc     @rt
+@fin:   stx     TOKBUF+6        ; length
+        lda     #0
+        ldy     #0
+@ck1:   clc
+        adc     TOKBUF,y        ; sum magic+len: indices 0..6
+        iny
+        cpy     #7
+        bcc     @ck1
+        ldy     #0
+@ck2:   cpy     TOKBUF+6
+        beq     @ckdone
+        clc
+        adc     TOKBUF+7,y      ; sum token: indices 7..6+len
+        iny
+        bne     @ck2
+@ckdone:ldy     TOKBUF+6
+        sta     TOKBUF+7,y      ; store checksum at index 7+len
+        jsr     token_write     ; ignore carry: write-protect = no persist
         rts
 
 tok_magic:  .byte   "CLDTK1"
