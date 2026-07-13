@@ -412,9 +412,6 @@ class PairingManager:
     def window_open(self) -> bool:
         return self.ttl <= 0 or (time.monotonic() - self.born) < self.ttl
 
-    def is_paired(self, peer) -> bool:
-        return peer in self.paired
-
     def locked_for(self, peer) -> float:
         """Seconds this peer must still wait before its next guess counts."""
         st = self._fails.get(peer)
@@ -436,15 +433,31 @@ class PairingManager:
             st[1] = time.monotonic() + wait
         return wait
 
+    def check_token(self, line: str) -> bool:
+        """Constant-time match of a presented token against stored hashes."""
+        import secrets
+        h = token_hash(line)
+        return any(secrets.compare_digest(h, d.get("token_sha256", ""))
+                   for d in self.devices)
+
+    def issue_token(self, peer) -> str:
+        """Mint a token, remember only its hash + metadata, return it once."""
+        tok = gen_token()
+        self.devices.append({
+            "token_sha256": token_hash(tok),
+            "first_ip": peer or "",
+            "paired_at": int(time.time()),
+        })
+        self._save()
+        return tok
+
     def check(self, peer, guess: str) -> bool:
-        """Constant-time compare; on a match the peer is remembered as paired."""
+        """Constant-time compare of the human code; storage happens on issue."""
         import secrets
         ok = (self.window_open()
               and secrets.compare_digest(guess, self.code))
         if ok:
-            self.paired.add(peer)
             self._fails.pop(peer, None)
-            self._save()  # survives bridge restarts
         return ok
 
 

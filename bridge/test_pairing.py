@@ -379,5 +379,25 @@ def test_clear_paired_counts_and_empties(tmp_path):
     assert json.loads(store.read_text())["devices"] == []
 
 
+from bridge import token_hash
+
+
+def test_issue_then_check_token(tmp_path):
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    tok = pm.issue_token("10.0.0.9")
+    assert len(tok) == 32
+    assert pm.check_token(tok) is True
+    assert pm.check_token("WRONGTOKENWRONGTOKENWRONGTOKEN99") is False
+    # persisted as a hash, never plaintext
+    assert token_hash(tok) == pm.devices[0]["token_sha256"]
+    assert tok not in (tmp_path / "p.json").read_text()
+
+
+def test_check_code_does_not_store_ip(tmp_path):
+    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    assert pm.check("10.0.0.9", "ABC123") is True
+    assert pm.devices == []  # code success alone stores nothing; issue does
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
