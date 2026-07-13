@@ -68,14 +68,15 @@ BOLD = "\x1b[1m" if _TTY else ""
 CORAL = "\x1b[38;5;209m" if _TTY else ""
 OFF = "\x1b[0m" if _TTY else ""
 
-_PEERW = 15  # column width for the peer/IP, so every line aligns (max IPv4 len)
-
-
 def _line(peer, body: str) -> None:
-    """Emit one console line: timestamp, an aligned peer column, then body.
-    A peerless line (peer=None) leaves the column blank so everything lines up."""
-    p = f"{peer:<{_PEERW}}" if peer else " " * _PEERW
-    print(f"{GRAY}{time.strftime('%H:%M:%S')} · {p} ·{OFF} {body}", flush=True)
+    """Emit one console line: timestamp, then (for a peer) the peer, then body.
+    A peerless line omits the peer column. IPs aren't padded - a given client's
+    address is stable, so successive lines line up on their own."""
+    stamp = time.strftime('%H:%M:%S')
+    if peer:
+        print(f"{GRAY}{stamp} · {peer} ·{OFF} {body}", flush=True)
+    else:
+        print(f"{GRAY}{stamp} ·{OFF} {body}", flush=True)
 
 
 def log(msg: str, peer=None) -> None:
@@ -133,8 +134,8 @@ def print_banner(args, transport, pm=None) -> None:
         row(transport.describe())
     if pm:
         row()
-        row("pairing code:", f"{GRAY}pairing code:{OFF}")
-        row(pm.code, f"{BOLD}{CORAL}{pm.code}{OFF}")
+        row(f"pairing code: {pm.code}",
+            f"{GRAY}pairing code: {OFF}{BOLD}{CORAL}{pm.code}{OFF}")
         if pm.ttl > 0:
             row(f"valid {int(pm.ttl // 60)} min for new devices",
                 f"{GRAY}valid {int(pm.ttl // 60)} min for new devices{OFF}")
@@ -164,7 +165,7 @@ def print_banner(args, transport, pm=None) -> None:
         # your API budget. Safe on a home LAN, never on the open internet.
         print(f"{CORAL}! Trusted LAN only.{OFF}{GRAY} This exposes a Claude "
               f"session on your network;{OFF}")
-        print(f"{GRAY}  do NOT port-forward it or bind it to a public "
+        print(f"{GRAY}do NOT port-forward it or bind it to a public "
               f"interface.{OFF}")
     print(f"{GRAY}Ctrl-C to stop{OFF}")
     print()
