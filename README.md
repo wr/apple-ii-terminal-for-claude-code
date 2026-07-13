@@ -71,9 +71,23 @@ One-time setup:
    python3 bridge.py --telnet --app --backend code --cols 80
    ```
 
-   It prints a 4-digit **pairing code** and listens on TCP 6400. (The bridge
-   is a `claude` CLI reachable over your network, so it locks itself: the
-   first thing a new device types must be that code. `--no-pair` disables.)
+   It prints a 6-character **pairing code** and listens on TCP 6400. (The
+   bridge is a `claude` CLI reachable over your network, so it locks itself:
+   the first thing a new device types must be that code.) Once a device
+   pairs, its IP is remembered across restarts so it never re-asks.
+
+   > **Trusted LAN only.** `--telnet` exposes a Claude session — in code mode,
+   > a shell on the host — to your local network. Run it on a home LAN you
+   > trust and **never port-forward it or bind it to a public interface.**
+   > It binds all interfaces (`0.0.0.0`) so the WiFi modem can reach it;
+   > pass `--host 127.0.0.1` or a specific IP to narrow that.
+
+   The pairing gate has brakes so a stray guess can't brute the code: wrong
+   guesses back off exponentially and a peer is cut off after 10 tries, and
+   the code stops accepting *new* devices after `--pair-ttl` minutes (default
+   15; `0` = never). To rotate the code, just restart the bridge; to revoke
+   every remembered device, restart with `--clear-paired`. `--no-pair` drops
+   the gate entirely (isolated networks only).
 
 2. **Modem**: store the bridge's address as phone book entry 0 and save:
 
@@ -131,7 +145,32 @@ cd apple2gs && ./build.sh    # builds BOTH clients into one CLAUDE.dsk
 python3 preview.py assets.inc out.png   # render the SHR screen, no emulator
 ```
 
-Everything is generated from source at build time: the font from unscii-8
+### Base disk image
+
+`build.sh` doesn't generate the disk from scratch. It starts from a pristine
+Apple DOS 3.3 System Master and injects our files — that master-based image is
+the one proven to boot KEGS, FloppyEmu, and real drives alike. You supply the
+master: it isn't in the repo (it's Apple's OS — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)).
+
+Get it, then verify:
+
+- File: `apple2gs/dos33-master-jan83.dsk`, exactly where `build.sh` looks (line 17).
+- What it is: the Apple DOS 3.3 System Master, January 1983 release — a 140K
+  5.25" image, 143,360 bytes. It's the widely mirrored System Master floppy;
+  any copy of that specific release will match.
+- Verify the exact bytes:
+
+  ```sh
+  shasum -a 256 apple2gs/dos33-master-jan83.dsk
+  # 70986935d95c4a918852700364ac107607eb861a7d93a69c2b5caf44a696b17a
+  ```
+
+A different checksum means a different dump — usually a later revision or a
+re-imaged copy. The build tolerates those, but only this hash reproduces the
+released disk byte-for-byte.
+
+Everything else is generated from source at build time: the font from unscii-8
 (a real bitmap font — TTFs rasterized to 8×8 are mush), the entire splash
 animation machine-ported frame-by-frame from a gif, the sound effects from
 tone tables in `gen_assets.py`. The disk is a pristine DOS 3.3 System Master with
@@ -179,4 +218,7 @@ crab are Anthropic's; the session mascot is original. Font:
 Emulator: [KEGS](https://kegs.sourceforge.net/). ProDOS-era wisdom: the
 Apple II community, who kept all of this alive for forty years.
 
-MIT license.
+MIT license — covers this project's own code only. The build and the release
+disk also include third-party material (Apple's DOS 3.3, the Clawd art, the
+unscii font); provenance and status for each is in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

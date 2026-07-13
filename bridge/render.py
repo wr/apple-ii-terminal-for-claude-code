@@ -35,15 +35,51 @@ C_WHITE = "\x03"        # 3 - inline/fenced code
 _WHITE_ON = COLOR + C_WHITE
 _WHITE_OFF = COLOR + C_GRAY
 
-# `code` spans -> white; other emphasis (** __ *) is just stripped.
+# `code` spans -> white; emphasis (** __ * _) is stripped, but ONLY when the
+# markers are actually acting as matched delimiters around a span. Literal
+# asterisks/underscores in prose and code must survive: `*.py`, `2 * 3`,
+# `__init__`, `a_b_c`, `**kwargs`. The rules below mirror CommonMark flanking
+# (a delimiter can't open with whitespace on its inner side, or close with
+# whitespace on it) plus a guard against intraword underscores.
 _CODE = re.compile(r"`([^`]+)`")
-_EMPHASIS = re.compile(r"(\*\*|__|\*)")
+
+# **bold** / *italic* — inner side must be non-space; italic ignores ** runs.
+_BOLD_STAR = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+_EM_STAR = re.compile(r"(?<!\*)\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?!\*)")
+# __bold__ / _italic_ — must sit on word boundaries so identifiers survive.
+_BOLD_UND = re.compile(r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
+_EM_UND = re.compile(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)")
+
+
+def _und_bold(m: re.Match) -> str:
+    """Strip __bold__ but leave dunder identifiers (__init__, __name__) alone."""
+    inner = m.group(1)
+    return m.group(0) if re.fullmatch(r"\w+", inner) else inner
+
+
+def _strip_emphasis(text: str) -> str:
+    """Remove emphasis/bold delimiters acting as such; keep literal * and _."""
+    text = _BOLD_STAR.sub(r"\1", text)
+    text = _BOLD_UND.sub(_und_bold, text)
+    text = _EM_STAR.sub(r"\1", text)
+    text = _EM_UND.sub(r"\1", text)
+    return text
 
 
 def _inline(text: str) -> str:
-    """Color `code` spans white via in-band markers, strip other emphasis."""
-    text = _CODE.sub(lambda m: _WHITE_ON + m.group(1) + _WHITE_OFF, text)
-    return _EMPHASIS.sub("", text)
+    """Color `code` spans white via in-band markers, strip other emphasis.
+
+    Emphasis is stripped only outside code spans, and the white control bytes
+    are injected after stripping so they're never eaten or misaligned.
+    """
+    out: list[str] = []
+    pos = 0
+    for m in _CODE.finditer(text):
+        out.append(_strip_emphasis(text[pos : m.start()]))
+        out.append(_WHITE_ON + m.group(1) + _WHITE_OFF)  # code kept verbatim
+        pos = m.end()
+    out.append(_strip_emphasis(text[pos:]))
+    return "".join(out)
 
 
 def to_ascii(text: str) -> str:

@@ -38,6 +38,8 @@ class TermConfig:
     pace_cps: int = 0          # chars/sec cap on output; 0 = as fast as possible
     newline: str = "\r\n"      # what we send at end of each line
     telnet: bool = False       # negotiate telnet options on a network channel
+    max_line: int = 4096       # cap a single input line; a peer that never
+                               # sends CR can't grow the buffer without bound
 
 
 class Terminal:
@@ -173,6 +175,8 @@ class Terminal:
                 return "\x03"
             if b < 32:
                 continue  # ignore other control chars
+            if self.cfg.max_line and len(buf) >= self.cfg.max_line:
+                continue  # line is over budget: drop printables until CR
             ch = chr(b & 0x7F)  # Apple II often sets the high bit; mask it off
             buf.append(ch)
             if self.cfg.echo:

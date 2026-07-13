@@ -1009,6 +1009,10 @@ session_start:
         sta     quitflag
         lda     #TOPROW
         sta     cury
+        lda     ACIA_S          ; sample DCD now: carrier present (bit5=0)
+        and     #$20            ; means gate future sends on it dropping;
+        eor     #$20            ; no carrier (KEGS / a DCD-less modem) means
+        sta     dcd_active      ; don't gate - never block those
         lda     #$0D            ; session-open probe: bridge answers with
         jsr     aciaput         ; the header (or the LOCKED notice)
 main:
@@ -1043,7 +1047,15 @@ main:
         bpl     @e
         jmp     quit_to_menu
 @notq:  jsr     echo_user
-        jsr     send_line
+        jsr     check_carrier   ; don't spray text at a modem in command mode
+        bcs     @spin
+        jsr     say_nocarr      ; carrier gone -> note it, drop to the menu
+        ldx     #120            ; let the message sit ~2s (frame_wait polls)
+@npz:   jsr     frame_wait
+        dex
+        bne     @npz
+        jmp     quit_to_menu
+@spin:  jsr     send_line
         jsr     spinner
         jsr     recv_reply
         jsr     bell_maybe      ; BEL semantics: ring once after a long think
@@ -1138,6 +1150,39 @@ send_line:
         bne     @l
 @d:     lda     #$0D
         jmp     aciaput
+
+; check_carrier - carry SET = ok to transmit. Only gates when DCD read
+; carrier at session start (dcd_active): a modem that doesn't drive DCD,
+; or KEGS/MAME, is never blocked, but a real carrier that later dropped
+; is caught before we spray text at a modem back in command mode.
+; 6551 status bit5: 1 = no carrier. A single status read - no long loop.
+check_carrier:
+        lda     dcd_active
+        beq     @ok
+        lda     ACIA_S
+        and     #$20            ; 1 = no carrier
+        bne     @no
+@ok:    sec
+        rts
+@no:    clc
+        rts
+
+; say_nocarr - note the dropped carrier in the transcript, then it's
+; back to the menu (mirrors the GS pre-send check; coral maps to normal
+; video on the 8-bit client)
+say_nocarr:
+        lda     #0
+        sta     invflag
+        ldx     #0
+@l:     lda     str_nocarr,x
+        beq     @d
+        stx     tmp3
+        jsr     cout
+        ldx     tmp3
+        inx
+        bne     @l
+@d:     lda     #$0D
+        jmp     cout
 
 ; =====================================================================
 ; read_line - into linebuf, echo at the input row. Handles the
@@ -1485,9 +1530,10 @@ page_instr:
 ; strings
 ; =====================================================================
 str_title:  .byte "Welcome to Terminal for Claude Code",0
-str_sub:    .byte "for Apple II - v0.2.0",0
+str_sub:    .byte "for Apple II - v1.0.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
+str_nocarr: .byte "* connection lost - back to menu",0
 str_dfail:  .byte "Dial failed - try the modem console",0
 str_atd:    .byte "ATDS=0",0
 str_quit:   .byte "/quit"
@@ -1535,6 +1581,7 @@ menusel:    .res 1
 dialres:    .res 1
 mdm_c1:     .res 1
 dcd_trust:  .res 1          ; DCD has read "no carrier" once: the pin is live
+dcd_active: .res 1          ; nonzero if DCD read carrier at session start
 muteflag:   .res 1          ; Ctrl-C during recv_reply: drain without drawing
 sp_ph:      .res 1
 sp_fr:      .res 2          ; spinner frames elapsed (~60/s): the bell gate
