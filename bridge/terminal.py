@@ -56,14 +56,14 @@ class Terminal:
         # Tell the client: I will echo, and suppress go-ahead (char-at-a-time).
         self.ch.write(bytes([IAC, WILL, OPT_ECHO, IAC, WILL, OPT_SGA]))
 
-    def _handle_iac(self) -> None:
-        verb = self._raw_byte_blocking()
-        if verb is None:
-            return  # peer gone mid-sequence
+    def _handle_iac(self, deadline: float | None = None) -> None:
+        verb = self._raw_byte_blocking(deadline=deadline)
+        if verb is None or verb == -1:
+            return  # peer gone mid-sequence, or deadline expired
         if verb in (DO, DONT, WILL, WONT):
-            opt = self._raw_byte_blocking()
-            if opt is None:
-                return  # peer gone before the option byte
+            opt = self._raw_byte_blocking(deadline=deadline)
+            if opt is None or opt == -1:
+                return  # peer gone before the option byte, or deadline expired
             # Politely refuse anything we didn't ask for; stay in char mode.
             if verb == DO:
                 self.ch.write(bytes([IAC, WONT, opt]))
@@ -74,8 +74,8 @@ class Terminal:
             # that never sends SE can't park us here forever.
             prev = None
             for _ in range(512):
-                b = self._raw_byte_blocking()
-                if b is None:
+                b = self._raw_byte_blocking(deadline=deadline)
+                if b is None or b == -1:
                     return
                 if prev == IAC and b == SE:
                     return
@@ -102,7 +102,7 @@ class Terminal:
             if b is None or b == -1:
                 return b
             if b == IAC and self.ch.is_network and self.cfg.telnet:
-                self._handle_iac()
+                self._handle_iac(deadline=deadline)
                 continue
             return b
 
