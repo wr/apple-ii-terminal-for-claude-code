@@ -27,3 +27,7 @@ apple2gs/snap/
 cfg/
 nvram/
 snap/
+
+# SDD scratch (subagent workspaces) and assembler listings
+.superpowers/
+*.lst
