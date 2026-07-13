@@ -250,11 +250,11 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
             log("channel closed by peer", peer=peer)
             return
         user = user.strip()
-        if user.upper().startswith("ATD"):
-            # Connect on the client's menu dials unconditionally; when the
-            # modem was already online the dial string comes through to us
-            # as data - swallow it
-            log("modem dial string while already online - ignored", peer=peer)
+        if user.upper().startswith(("ATD", "ATO")):
+            # Dial (ATD) / resume-online (ATO) strings: the client sends these to
+            # the modem, but when the modem is already in data mode they pass
+            # through to us as a line - swallow them, never a prompt.
+            log(f"modem command passed through - ignored: {user!r}", peer=peer)
             continue
         if not user or user == "\x03":
             if backend:      # session-open probe: refresh the real header
@@ -535,8 +535,8 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
         if line is None:
             return False
         line = line.strip()
-        if line.upper().startswith("ATD"):
-            continue  # the client's auto-dial isn't a guess
+        if line.upper().startswith(("ATD", "ATO")):
+            continue  # the client's dial / resume-online commands aren't a guess
         if is_modem_chatter(line):
             log(f"modem chatter ignored: {line!r}", peer=peer)
             continue  # ...and neither is the modem's own announcement
