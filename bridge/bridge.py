@@ -503,9 +503,85 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
     return False
 
 
+class _IdleGuard:
+    """Wraps a Channel with an idle-read timeout for a listening bridge.
+
+    A --telnet bridge serves one peer at a time. A peer that connects and then
+    sends nothing - a half-dead socket, or an unpaired caller that never types
+    the code - would hold that single slot open indefinitely (TCP keepalive
+    only reaps a truly dead link, ~75s, and never notices a live-but-silent
+    one). A watchdog thread here closes the underlying channel once `timeout`
+    seconds pass with no byte received; every real byte resets the clock, so a
+    human typing a pairing code or a prompt slowly is never cut off. Once the
+    peer owns a live session, `disarm()` stops the watchdog - long quiet spells
+    (Claude thinking, the user reading a long reply) are legitimate then and
+    must not drop the line."""
+
+    def __init__(self, ch, timeout: float, peer=None) -> None:
+        self._ch = ch
+        self._timeout = timeout
+        self._last = time.monotonic()
+        self._done = threading.Event()
+        self._armed = True
+        self.is_network = getattr(ch, "is_network", False)
+        self.peer = peer if peer is not None else getattr(ch, "peer", None)
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def _watch(self) -> None:
+        while not self._done.wait(0.5):
+            if self._armed and time.monotonic() - self._last >= self._timeout:
+                log(f"idle timeout: dropping {self.peer or 'peer'} after "
+                    f"{self._timeout}s of silence")
+                try:
+                    self._ch.close()  # unblocks the reader with a closed channel
+                except Exception:
+                    pass
+                self._done.set()
+                return
+
+    def read_byte(self):
+        b = self._ch.read_byte()
+        if b is not None and b != -1:  # a real byte, not a timeout or EOF
+            self._last = time.monotonic()
+        return b
+
+    def write(self, data: bytes) -> None:
+        self._ch.write(data)
+
+    def close(self) -> None:
+        self._done.set()
+        try:
+            self._ch.close()
+        except Exception:
+            pass
+
+    def disarm(self) -> None:
+        """Stop enforcing the idle timeout - the peer now owns a live session."""
+        self._armed = False
+        self._done.set()
+
+
 def run_session(term: Terminal, args, pm: PairingManager | None = None) -> None:
+    # A listening bridge serves one peer at a time; an idle or never-pairing
+    # peer would otherwise hold that slot forever. Guard the pre-session window
+    # with an idle-read timeout, then disarm once the peer owns a live session.
+    guard = None
+    if args.telnet and getattr(args, "idle_timeout", 0) > 0:
+        guard = _IdleGuard(term.ch, args.idle_timeout)
+        term.ch = guard
+    try:
+        _run_session(term, args, pm, guard)
+    finally:
+        if guard:
+            guard.disarm()
+
+
+def _run_session(term: Terminal, args, pm, guard) -> None:
     if pm and not require_pairing(term, args, pm):
         return
+    if guard:
+        guard.disarm()  # authenticated (or no gate): the peer owns the session
     cols = args.cols
     mode = args.backend
     backend = None
@@ -681,6 +757,12 @@ def parse_args(argv=None):
     p.add_argument("--no-pair", action="store_true",
                    help="telnet: skip the pairing gate ENTIRELY - anyone who "
                         "can reach the host gets in (trusted networks only)")
+    p.add_argument("--idle-timeout", type=int, default=60, metavar="SECS",
+                   help="telnet: drop a connected peer that sends nothing for "
+                        "this many seconds before its session is under way "
+                        "(default 60; 0 disables). Frees the single listener "
+                        "from an idle or never-pairing peer; the clock resets "
+                        "on every byte, so slow typing is never cut off.")
     p.add_argument("--telnet-negotiate", action="store_true",
                    help="do telnet IAC negotiation (for a raw `telnet` client)")
 

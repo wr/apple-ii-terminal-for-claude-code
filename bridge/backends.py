@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 from typing import Iterator
@@ -163,12 +164,23 @@ class ChatBackend(Backend):
         self._system = TERMINAL_SYSTEM.format(cols=cols)
         self._messages: list[dict] = []
         self._cancel = False
+        self._stream = None  # the in-flight anthropic stream, if any
 
     def reset(self) -> None:
         self._messages = []
 
     def cancel(self) -> None:
-        self._cancel = True  # checked between streamed chunks
+        """Abort an in-flight turn (the client sent Ctrl-C). Setting the flag
+        stops us at the next chunk; closing the stream also unblocks a turn
+        that's STALLED between chunks, so a wedged model doesn't hang the
+        session waiting for a byte that never comes."""
+        self._cancel = True
+        s = self._stream
+        if s is not None:
+            try:
+                s.close()  # tears down the HTTP response from under the reader
+            except Exception:
+                pass
 
     def stream(self, user_text: str) -> Iterator[str]:
         self._cancel = False
@@ -182,11 +194,19 @@ class ChatBackend(Backend):
                 output_config={"effort": self._effort},
                 messages=self._messages,
             ) as stream:
-                for text in stream.text_stream:
-                    if self._cancel:
-                        break
-                    reply_parts.append(text)
-                    yield text
+                self._stream = stream
+                try:
+                    for text in stream.text_stream:
+                        if self._cancel:
+                            break
+                        reply_parts.append(text)
+                        yield text
+                except Exception:
+                    # cancel() closes the stream from another thread, which
+                    # surfaces here as a read error - treat it as a clean stop,
+                    # but let a genuine streaming fault propagate.
+                    if not self._cancel:
+                        raise
             if self._cancel:
                 # keep the partial turn so the transcript stays coherent
                 self._messages.append({"role": "assistant",
@@ -198,6 +218,40 @@ class ChatBackend(Backend):
             # Roll back the user turn so the next message starts clean.
             self._messages.pop()
             yield f"\n[bridge error: {exc}]"
+        finally:
+            self._stream = None
+
+
+def _kill_process_group(proc: subprocess.Popen, grace: float = 2.0) -> None:
+    """Take down a Popen's whole process group: SIGTERM it, wait `grace`
+    seconds, then SIGKILL anything still standing. Assumes the process was
+    started with start_new_session=True so its pgid == pid, which is how one
+    signal reaches `claude -p` AND the children it spawned (MCP servers, tools)
+    instead of orphaning them. No-ops if the process is already gone."""
+    if proc.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return  # already reaped, or not a group we can signal
+
+    def _sig(sig) -> None:
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    _sig(signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace)
+        return  # went quietly
+    except subprocess.TimeoutExpired:
+        pass
+    _sig(signal.SIGKILL)  # ignored SIGTERM; SIGKILL can't be caught
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -330,13 +384,18 @@ class CodeBackend(Backend):
         return cmd
 
     def cancel(self) -> None:
-        """Kill the in-flight `claude -p` turn (the client sent Ctrl-C).
-        The pipe EOFs, stream() winds down, and the exit-code complaint is
+        """Kill the in-flight `claude -p` turn AND every child it spawned (the
+        client sent Ctrl-C). The turn leads its own process group (see the
+        start_new_session below), so we signal the whole group - SIGTERM, a
+        short grace, then SIGKILL for anything that ignored it - instead of
+        terminating just the parent and orphaning its children. stderr is
+        drained on its own thread, so a full pipe can't wedge the kill. The
+        pipe EOFs, stream() winds down, and the exit-code complaint is
         suppressed because we're the ones who shot it."""
         self._cancelled = True
         proc = self._proc
-        if proc and proc.poll() is None:
-            proc.terminate()
+        if proc is not None:
+            _kill_process_group(proc)
 
     def stream(self, user_text: str) -> Iterator[str]:
         self._last_duration_ms = None
@@ -351,6 +410,8 @@ class CodeBackend(Backend):
                 text=True,
                 bufsize=1,
                 cwd=self._cwd,
+                start_new_session=True,  # own process group: cancel() can kill
+                                         # claude and its children in one signal
             )
         except FileNotFoundError:
             yield f"\n[bridge error: '{self._bin}' not found on the host]"
@@ -358,6 +419,23 @@ class CodeBackend(Backend):
 
         self._proc = proc
         assert proc.stdout is not None
+        # Drain stderr on a thread for the whole turn. `claude -p` can emit more
+        # than a pipe buffer holds; if we only read stderr at the end, a full
+        # stderr pipe would block the child (and us) mid-turn. Collect it here
+        # and surface it only if the exit code turns out bad.
+        err_parts: list[str] = []
+
+        def _drain_err(p=proc) -> None:
+            try:
+                if p.stderr is not None:
+                    for chunk in iter(lambda: p.stderr.read(4096), ""):
+                        err_parts.append(chunk)
+            except Exception:
+                pass
+
+        err_thread = threading.Thread(target=_drain_err, daemon=True)
+        err_thread.start()
+
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -369,11 +447,12 @@ class CodeBackend(Backend):
             yield from self._render_event(event)
 
         proc.wait()
+        err_thread.join(timeout=1.0)
         self._proc = None
         if self._cancelled:
             return  # we killed it; a nonzero exit code is expected, not news
         if proc.returncode not in (0, None):
-            err = (proc.stderr.read() if proc.stderr else "").strip()
+            err = "".join(err_parts).strip()
             yield f"\n[claude exited {proc.returncode}{': ' + err if err else ''}]"
 
     def _render_event(self, event: dict) -> Iterator[str]:
