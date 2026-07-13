@@ -83,22 +83,24 @@ class Terminal:
             return  # oversized subnegotiation: give up, stay in char mode
 
     # -- low level ---------------------------------------------------------- #
-    def _raw_byte_blocking(self) -> int | None:
+    def _raw_byte_blocking(self, deadline: float | None = None) -> int | None:
         while True:
             b = self.ch.read_byte()
             if b is None:
                 self._closed = True
                 return None
             if b == -1:
+                if deadline is not None and time.monotonic() >= deadline:
+                    return -1
                 continue
             return b
 
-    def _read_cooked_byte(self) -> int | None:
+    def _read_cooked_byte(self, deadline: float | None = None) -> int | None:
         """One byte with telnet IAC sequences transparently consumed."""
         while True:
-            b = self._raw_byte_blocking()
-            if b is None:
-                return None
+            b = self._raw_byte_blocking(deadline=deadline)
+            if b is None or b == -1:
+                return b
             if b == IAC and self.ch.is_network and self.cfg.telnet:
                 self._handle_iac()
                 continue
@@ -133,9 +135,10 @@ class Terminal:
         native client sends a bare 0x03 to cancel the turn. Anything else
         arriving mid-generation is type-ahead we don't support, or modem
         chatter; either way it's discarded. Costs at most one read timeout
-        (~0.2s) when the line is quiet."""
+        (~0.2s) when the line is quiet. Bounded so a flood of bytes (or a
+        peer that never times out) can't park us here forever."""
         seen = False
-        while True:
+        for _ in range(4096):  # drain what's buffered, don't chase a flood
             b = self.ch.read_byte()
             if b is None:
                 self._closed = True
@@ -144,18 +147,24 @@ class Terminal:
                 return seen
             if (b & 0x7F) == CTRL_C:
                 seen = True
+        return seen
 
-    def read_line(self, prompt: str = "") -> str | None:
+    def read_line(self, prompt: str = "", deadline: float | None = None) -> str | None:
         """Read one CR-terminated line. Returns None if the channel closed.
 
         A bare Ctrl-C returns the sentinel string '\\x03' so the caller can treat
-        it as an interrupt; Ctrl-U clears the current line.
+        it as an interrupt; Ctrl-U clears the current line. If `deadline` (a
+        time.monotonic() value) passes before a full line arrives, returns None.
         """
         if prompt:
             self.write_text(prompt)
         buf: list[str] = []
         while True:
-            b = self._read_cooked_byte()
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            b = self._read_cooked_byte(deadline=deadline)
+            if b == -1:      # a timeout tick with a deadline active
+                continue
             if b is None:
                 return None
             if not buf and b == self._skip_eol:
