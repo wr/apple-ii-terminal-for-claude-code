@@ -242,8 +242,21 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
         if fresh and is_modem_chatter(user):
             log(f"modem chatter ignored: {user!r}")
             continue
-        if fresh and _looks_like_token(user):
-            log("stale device token on an ungated transport - ignored")
+        if _looks_like_token(user):
+            # A native client re-runs session_start and auto-sends its stored
+            # token as the first line on EVERY Connect. On a fresh session that
+            # line is consumed by require_pairing - but when the modem keeps the
+            # TCP link up across a client-side Ctrl-C -> menu -> Connect, the
+            # bridge is already mid-session and would otherwise forward the
+            # token to Claude as a prompt (and the client, having cleared its
+            # screen, shows no header). Treat it like the session-open probe:
+            # re-send the header so the reconnected client's UI repopulates,
+            # and swallow the token. (Not gated on `fresh`: a live reconnect
+            # arrives mid-session.)
+            log("device token as a line (reconnect/stale) - re-synced header")
+            if backend:
+                send_header(term, backend)
+            term.write(EOT)
             continue
         fresh = False
         show_user(peer, user)
