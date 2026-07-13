@@ -1,6 +1,7 @@
 import time
 import types
-from bridge import PairingManager, require_pairing, CMD_TOKEN
+from bridge import (PairingManager, require_pairing, CMD_TOKEN,
+                     run_app_session, _looks_like_token, gen_token, _TOKEN_LEN)
 
 
 class _FakeCh:
@@ -28,6 +29,33 @@ class _FakeTerm:
 
     def write_line(self, text=""):
         self.lines_out.append(text)
+
+    def poll_ctrl_c(self) -> bool:
+        return False
+
+
+class _FakeBackend:
+    """Minimal stand-in for backends.CodeBackend/ChatBackend: records every
+    prompt it's asked to stream, so a test can assert a stale token never
+    reached it."""
+    def __init__(self):
+        self.prompts = []
+
+    def prime(self):
+        pass
+
+    def header(self):
+        return None  # send_header() no-ops
+
+    def stream(self, user):
+        self.prompts.append(user)
+        return iter(["ok"])
+
+    def footer(self):
+        return ""
+
+    def cancel(self):
+        pass
 
 
 def _args(**kw):
@@ -71,3 +99,36 @@ def test_valid_token_pairs_after_window_closes(tmp_path):
     assert pm.window_open() is False
     term = _FakeTerm([tok])
     assert require_pairing(term, _args(), pm) is True
+
+
+def test_looks_like_token_shape():
+    assert _looks_like_token(gen_token()) is True
+    assert _looks_like_token("hello") is False
+    assert _looks_like_token("a" * _TOKEN_LEN) is False   # lowercase not in alphabet
+    assert _looks_like_token("ABCDEFGHJKMNPQRSTUVWXYZ23456789") is False  # 30 chars, wrong len
+
+
+def test_run_app_session_swallows_stale_token_on_ungated_transport():
+    # A client whose disk holds a token from an earlier --telnet pairing
+    # reconnects through an ungated transport (--connect/--serial/--no-pair),
+    # where require_pairing never runs. Its auto-sent token line must be
+    # swallowed as the FIRST line, not forwarded to the backend as a prompt.
+    tok = gen_token()
+    term = _FakeTerm([tok, "hello", None])
+    backend = _FakeBackend()
+    args = _args(cols=80)
+    run_app_session(term, args, backend, None, "code")
+    assert backend.prompts == ["hello"], (
+        f"stale token leaked through to the backend: {backend.prompts!r}")
+
+
+def test_run_app_session_does_not_swallow_token_shaped_line_mid_session():
+    # Once the session is no longer "fresh", a message that happens to be
+    # 32 token-alphabet characters is a legitimate prompt and must go through.
+    tok = gen_token()
+    term = _FakeTerm(["hello", tok, None])
+    backend = _FakeBackend()
+    args = _args(cols=80)
+    run_app_session(term, args, backend, None, "code")
+    assert backend.prompts == ["hello", tok], (
+        f"a mid-session token-shaped line was wrongly swallowed: {backend.prompts!r}")

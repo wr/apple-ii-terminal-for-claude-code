@@ -242,6 +242,9 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode) -> None:
         if fresh and is_modem_chatter(user):
             log(f"modem chatter ignored: {user!r}")
             continue
+        if fresh and _looks_like_token(user):
+            log("stale device token on an ungated transport - ignored")
+            continue
         fresh = False
         show_user(peer, user)
         if user.startswith("/"):
@@ -343,6 +346,14 @@ _TOKEN_LEN = 32  # 32 * ~4.95 bits ~= 158 bits of entropy
 def gen_token(n: int = _TOKEN_LEN) -> str:
     import secrets
     return "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(n))
+
+
+def _looks_like_token(s: str) -> bool:
+    """A client with a stored device token auto-sends it as its first line.
+    On an UNGATED transport (no require_pairing) that would otherwise become a
+    spurious Claude prompt, so run_app_session swallows a first line matching a
+    token's exact shape (length + alphabet)."""
+    return len(s) == _TOKEN_LEN and all(c in _PAIR_ALPHABET for c in s)
 
 
 def token_hash(token: str) -> str:
