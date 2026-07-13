@@ -124,12 +124,12 @@ class TestCodeGen(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 class TestManager(unittest.TestCase):
     def test_right_and_wrong_code(self):
+        # Code success no longer marks the peer "paired" itself (that's now
+        # `issue_token`'s job) - `check` just validates the human code.
         pm, path = make_pm("ABC234")
         try:
             self.assertFalse(pm.check("p", "WRONG"))
-            self.assertFalse(pm.is_paired("p"))
             self.assertTrue(pm.check("p", "ABC234"))
-            self.assertTrue(pm.is_paired("p"))
         finally:
             os.path.exists(path) and os.unlink(path)
 
@@ -173,7 +173,6 @@ class TestManager(unittest.TestCase):
             pm.born = time.monotonic() - 61
             self.assertFalse(pm.window_open())
             self.assertFalse(pm.check("q", "ABC234"))
-            self.assertFalse(pm.is_paired("q"))
         finally:
             os.path.exists(path) and os.unlink(path)
 
@@ -186,18 +185,21 @@ class TestManager(unittest.TestCase):
             os.path.exists(path) and os.unlink(path)
 
     def test_revocation_and_persistence(self):
+        # Trust now lives in an issued token's hash, not a peer IP - exercise
+        # the same persist/reload/revoke lifecycle through issue_token/
+        # check_token instead of the removed is_paired/paired-set API.
         pm, path = make_pm("ABC234")
         try:
-            pm.check("p", "ABC234")
-            self.assertTrue(pm.is_paired("p"))
-            # a fresh manager on the same store still knows the peer...
+            tok = pm.issue_token("p")
+            self.assertTrue(pm.check_token(tok))
+            # a fresh manager on the same store still recognizes the token...
             pm2 = PairingManager("ABC234", 0, store_path=path)
-            self.assertTrue(pm2.is_paired("p"))
+            self.assertTrue(pm2.check_token(tok))
             # ...until revoked
             self.assertEqual(pm2.clear_paired(), 1)
-            self.assertFalse(pm2.is_paired("p"))
+            self.assertFalse(pm2.check_token(tok))
             pm3 = PairingManager("ABC234", 0, store_path=path)
-            self.assertFalse(pm3.is_paired("p"))
+            self.assertFalse(pm3.check_token(tok))
         finally:
             os.path.exists(path) and os.unlink(path)
 
@@ -215,16 +217,12 @@ class TestManager(unittest.TestCase):
 # require_pairing integration
 # --------------------------------------------------------------------------- #
 class TestRequirePairing(unittest.TestCase):
-    def test_paired_peer_passes_without_asking(self):
-        pm, path = make_pm()
-        try:
-            pm.paired.add(FakeChannel.peer)
-            ch = FakeChannel()
-            term = Terminal(ch, TermConfig(width=80, echo=False, telnet=False))
-            self.assertTrue(bridge.require_pairing(term, Args(), pm))
-            self.assertEqual(ch.out(), b"")  # nothing sent; straight through
-        finally:
-            os.path.exists(path) and os.unlink(path)
+    # NOTE: the old test_paired_peer_passes_without_asking asserted that
+    # membership in an in-process `pm.paired` IP set let a peer skip the
+    # prompt. That set is gone - trust now requires presenting a token
+    # (see test_pairing_flow.py's test_valid_token_first_line_pairs_without_code
+    # for the replacement coverage), so the IP-bypass test was removed rather
+    # than rewritten.
 
     def test_locked_header_on_empty_probe(self):
         pm, path = make_pm("ABC234")
@@ -235,7 +233,7 @@ class TestRequirePairing(unittest.TestCase):
             out = ch.out()
             self.assertIn(b"\x0e", out)        # header frame marker
             self.assertIn(b"LOCKED", out)
-            self.assertIn(b"Paired", out)
+            self.assertIn(bridge.CMD_TOKEN, out)  # code success issues a device token
         finally:
             os.path.exists(path) and os.unlink(path)
 
@@ -245,8 +243,8 @@ class TestRequirePairing(unittest.TestCase):
             r, ch = run_pairing(pm, feed=b"NOPE99\rABC234\r")
             self.assertTrue(r)
             self.assertIn(b"locked", ch.out())  # first miss: "bridge is locked"
-            self.assertIn(b"Paired", ch.out())
-            self.assertTrue(pm.is_paired(FakeChannel.peer))
+            self.assertIn(bridge.CMD_TOKEN, ch.out())  # code success issues a token
+            self.assertEqual(len(pm.devices), 1)
         finally:
             os.path.exists(path) and os.unlink(path)
 
