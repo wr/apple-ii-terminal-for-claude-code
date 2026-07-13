@@ -1,0 +1,87 @@
+name: CI
+
+# The one shippable artifact is CLAUDE.dsk. The release gate at the bottom
+# asserts the built disk carries BOTH clients (COBJ + COBJ8) - the check that
+# would have caught the v0.2.0 disk shipping with no 8-bit client. See W-530.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install apt packages (cc65, shellcheck)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cc65 shellcheck
+
+      - name: Install Python deps (Pillow + bridge requirements)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pillow
+          python3 -m pip install -r bridge/requirements.txt
+
+      # dos33fsprogs isn't packaged; build the two util dirs build.sh needs
+      # (utils/dos33fs-utils -> dos33, utils/asoft_basic-utils -> tokenize_asoft).
+      # Cache the whole checkout so we skip the clone+make on cache hits.
+      - name: Cache dos33fsprogs
+        id: cache-dos33
+        uses: actions/cache@v4
+        with:
+          path: ~/dos33fsprogs
+          key: dos33fsprogs-utils-v1
+
+      - name: Build dos33fsprogs (cache miss)
+        if: steps.cache-dos33.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/deater/dos33fsprogs ~/dos33fsprogs
+          make -C ~/dos33fsprogs/utils/dos33fs-utils
+          make -C ~/dos33fsprogs/utils/asoft_basic-utils
+
+      - name: Verify dos33fsprogs tools built
+        run: |
+          test -x ~/dos33fsprogs/utils/dos33fs-utils/dos33
+          test -x ~/dos33fsprogs/utils/asoft_basic-utils/tokenize_asoft
+
+      # --- Checks -----------------------------------------------------------
+
+      - name: Bridge / renderer tests
+        run: |
+          (cd bridge && python3 test_render_markdown.py)
+          (cd bridge && python3 test_pairing.py)
+          python3 tests/test_interrupt.py
+
+      - name: Shellcheck
+        run: shellcheck apple2gs/build.sh tools/install-sd.sh
+
+      # Fast-fail assembly of both clients (mirrors build.sh flags). claude.s
+      # includes the generated assets.inc, so gen_assets.py must run first.
+      - name: Assemble both clients
+        run: |
+          (cd apple2gs && python3 gen_assets.py && ca65 --cpu 65816 -o claude.o claude.s)
+          ca65 --cpu 6502 -o apple2/claude2.o apple2/claude2.s
+
+      # --- Release gate -----------------------------------------------------
+
+      - name: Full build (CLAUDE.dsk)
+        run: |
+          # build.sh cd's into apple2gs/ itself and reads DOS33FSPROGS. The
+          # ~/Downloads copy it attempts is already best-effort (|| true), so no
+          # runner HOME setup is needed.
+          export DOS33FSPROGS="$HOME/dos33fsprogs"
+          ./apple2gs/build.sh
+
+      - name: Assert CLAUDE.dsk contains both clients (COBJ + COBJ8)
+        run: |
+          for n in COBJ COBJ8; do
+            strings apple2gs/CLAUDE.dsk | grep -qw "$n" || { echo "::error::CLAUDE.dsk is missing $n"; exit 1; }
+          done
+          echo "CLAUDE.dsk carries both COBJ and COBJ8"
