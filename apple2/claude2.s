@@ -49,6 +49,12 @@ DOSWARM = $03D0
 
 RING    = $1F00         ; 256-byte rx ring (page below the program)
 
+; ---- token sector (device pairing): RWTS a reserved sector on the boot disk
+TOKBUF  = $9000         ; sector buffer (the free $9000-$95FF gap above us)
+RWTS    = $BD00         ; DOS 3.3 RWTS entry (A=lo/Y=hi -> IOB)
+TOKTRK  = $12           ; reserved token track
+TOKSEC  = $0F           ; reserved token sector
+
 ; ---- protocol
 EOT        = $04
 CMD_COLOR  = $01
@@ -1476,6 +1482,109 @@ do_header:
         pla
         sta     curx
         rts
+
+; =====================================================================
+; token sector I/O - RWTS-read/write a reserved sector (T=$12 S=$0F) on
+; the boot disk to persist a device-pairing token across reboots. All of
+; this runs pre-session (auto-send) or mid-pairing-reply (do_token); the
+; only unavoidably-deaf stretch is inside RWTS itself (a monolithic DOS
+; call), which can't be woven with rb_poll - see the report's caveat.
+; Sector layout: magic "CLDTK1"(6) | len(1) | token(len) | csum(1).
+; csum = 8-bit sum of bytes [0 .. 6+len].
+; =====================================================================
+
+; Copy the boot slot/drive out of DOS's own primary IOB ($B7E8) so token
+; I/O targets the same physical device the client booted from.
+tok_init_dev:
+        lda     $B7E9           ; DOS boot slot (slot*16)
+        sta     iob_slot
+        lda     $B7EA           ; DOS boot drive
+        sta     iob_drive
+        rts
+
+; RWTS-read the token sector into TOKBUF. Carry clear = success.
+token_read:
+        lda     #TOKTRK
+        sta     iob_trk
+        lda     #TOKSEC
+        sta     iob_sec
+        lda     #$01            ; command 1 = read
+        sta     iob_cmd
+        jmp     rwts_call
+
+; RWTS-write TOKBUF to the token sector. Carry clear = success.
+token_write:
+        lda     #TOKTRK
+        sta     iob_trk
+        lda     #TOKSEC
+        sta     iob_sec
+        lda     #$02            ; command 2 = write
+        sta     iob_cmd
+        ; fall through
+rwts_call:
+        lda     #<iob
+        ldy     #>iob           ; A=lo/Y=hi -> IOB, per DOS 3.3 RWTS
+        jsr     RWTS
+        lda     iob_err         ; 0 = ok
+        beq     @ok
+        sec
+        rts
+@ok:    clc
+        rts
+
+; tok_valid - after token_read, returns Z=1 (A=0) if TOKBUF holds valid
+; magic and a matching checksum; Z=0 (A=1) otherwise. Clobbers A,X,Y,$06.
+tok_valid:
+        ldx     #0
+@m:     lda     TOKBUF,x
+        cmp     tok_magic,x
+        bne     @bad
+        inx
+        cpx     #6
+        bne     @m
+        lda     TOKBUF+6        ; len
+        sta     $06             ; scratch (ptr lo; dead here, reloaded on draw)
+        lda     #0
+        ldx     #0
+@s:     clc
+        adc     TOKBUF,x        ; sum magic+len: indices 0..6
+        inx
+        cpx     #7
+        bcc     @s
+        ldy     #0
+@t:     cpy     $06             ; summed all len token bytes?
+        beq     @done
+        clc
+        adc     TOKBUF+7,y      ; sum token: indices 7..6+len
+        iny
+        bne     @t
+@done:  ldy     $06
+        cmp     TOKBUF+7,y      ; compare to checksum byte at index 7+len
+        bne     @bad
+        lda     #0              ; Z=1: valid
+        rts
+@bad:   lda     #1              ; Z=0: invalid
+        rts
+
+tok_magic:  .byte   "CLDTK1"
+
+; DOS 3.3 RWTS IOB (17 bytes) + DCT. Slot/drive are patched from DOS's own
+; boot IOB by tok_init_dev. Layout per Beneath Apple DOS ch.6.
+iob:        .byte   $01         ; +0  IOB type ($01)
+iob_slot:   .byte   $60         ; +1  slot*16 (patched at boot)
+iob_drive:  .byte   $01         ; +2  drive (patched at boot)
+iob_vol:    .byte   $00         ; +3  volume expected (0 = any)
+iob_trk:    .byte   TOKTRK      ; +4  track
+iob_sec:    .byte   TOKSEC      ; +5  sector
+            .word   dct         ; +6  DCT pointer
+            .word   TOKBUF      ; +8  data buffer
+            .word   $0000       ; +10 unused
+iob_cmd:    .byte   $01         ; +12 command 1=read 2=write
+iob_err:    .byte   $00         ; +13 error code (return)
+            .byte   $00         ; +14 last volume (return)
+            .byte   $60         ; +15 last slot (return)
+            .byte   $01         ; +16 last drive (return)
+dct:        .byte   $00,$01,$EF,$D8  ; device characteristics table
 
 ; =====================================================================
 ; modem console - raw keys out, raw bytes in. Esc = menu.
