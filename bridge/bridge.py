@@ -149,7 +149,7 @@ def print_banner(args, transport, pm=None) -> None:
         row("only.", f"{GRAY}only.{OFF}")
 
     title = " Apple II Terminal for Claude Code "
-    ver = " v1.0.1 "
+    ver = " v1.1.0 "
     inner = max([len(p) + 4 for p, _ in rows] + [38])  # box is 40 wide
     print()
     print(f"{CORAL}╭─{BOLD}{title}{OFF}{CORAL}"

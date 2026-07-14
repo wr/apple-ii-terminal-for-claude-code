@@ -9,9 +9,39 @@ artifacts carry a SHA-256 so you can verify the download.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-13
+
+Device pairing that survives reboots, plus real turn cancellation and CI.
+
+### Added
+- **Disk-stored device token pairing.** After you type the pairing code once,
+  the bridge hands the client a private device token, which it saves to a
+  reserved sector on its boot disk and presents automatically on every future
+  connect — so a paired Apple II never needs the code again, even across
+  reboots. The host stores only a SHA-256 of the token, never the token itself.
+- **Per-device pairing codes.** By default each connecting IP gets its own
+  code, printed to the bridge console the moment that device connects, so a
+  code seen for one device can't enroll another. `--pair-code` still pins one
+  shared code for everyone.
+- **Real Ctrl-C cancellation** of an in-flight turn, and a `--idle-timeout` so
+  an unpaired or idle peer can't hold the single listener slot open.
+- A tested-model **compatibility matrix** (`docs/COMPATIBILITY.md`) and a
+  `SECURITY.md` covering the trusted-LAN model and exactly what's stored.
+- **CI** with a disk-catalog release gate: every release disk must carry both
+  `COBJ` (IIgs) and `COBJ8` (8-bit).
+
 ### Changed
-- `build.sh` no longer copies the built disk to `~/Downloads` by default. Set
+- Pairing trust is now a **client-held device token, not a peer IP**, closing
+  the DHCP-lease-reuse and persisted-loopback holes of the old IP model.
+- `build.sh` no longer copies the built disk to `~/Downloads` by default; set
   `COPY_TO_DOWNLOADS=1` to opt in (convenience for the KEGS boot path).
+
+### Fixed
+- 8-bit clients (IIe, IIc, IIc Plus, II/II+) captured the device token at the
+  wrong buffer offset, so token pairing never persisted there — the code had to
+  be re-typed on every boot. Fixed; token pairing now works on every model.
+
+SHA-256: `fa2654f87a54e577553210b2531a07a9b83b818ed8e6b58b92ebd5a1d2596c9d`
 
 ## [1.0.1] - 2026-07-13
 

@@ -3022,7 +3022,7 @@ mt_x:   rts
 ; =====================================================================
 str_title:  .byte "Claude Code",0         ; placeholder until the real header lands
 str_welcome:.byte "Welcome to Terminal for Claude Code",0
-str_ver:    .byte "for Apple IIgs - v1.0.1",0
+str_ver:    .byte "for Apple IIgs - v1.1.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
 str_dfail:  .byte "Dial failed - try the modem console",0

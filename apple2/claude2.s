@@ -1758,7 +1758,7 @@ page_instr:
 ; strings
 ; =====================================================================
 str_title:  .byte "Welcome to Terminal for Claude Code",0
-str_sub:    .byte "for Apple II - v1.0.1",0
+str_sub:    .byte "for Apple II - v1.1.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
 str_nocarr: .byte "* connection lost - back to menu",0
