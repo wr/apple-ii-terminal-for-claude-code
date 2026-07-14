@@ -80,7 +80,7 @@ consulted for trust.
 
 ## Token
 
-- 160 bits of `secrets` entropy, rendered as 32 characters in the existing
+- About 158 bits of `secrets` entropy, rendered as 32 characters in the existing
   pairing alphabet (`ABCDEFGHJKMNPQRSTUVWXYZ23456789`, uppercase, look-alikes
   dropped). Pure 7-bit ASCII: survives the wire, `to_ascii`, and the client's
   high-bit masking unchanged.

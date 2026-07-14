@@ -510,6 +510,7 @@ class PairingManager:
         self.store_path = store_path or _pairing_store()
         self.devices = self._load()
         self._fails: dict = {}              # peer -> [count, locked_until]
+        self._stale_token_peers: set = set()  # one free stale token per run/IP
 
     def code_for(self, peer) -> str:
         """The code this peer must type. A pinned --pair-code is the same for
@@ -533,6 +534,18 @@ class PairingManager:
         explicitly shared, so it is left in place."""
         if not self.pinned:
             self._codes.pop(peer or "?", None)
+
+    def take_stale_token_exemption(self, peer) -> bool:
+        """Return True once per source IP and bridge run.
+
+        A native client presents its disk token before the user can replace a
+        stale one. Later token-shaped misses from that IP are code guesses.
+        """
+        key = peer or "?"
+        if key in self._stale_token_peers:
+            return False
+        self._stale_token_peers.add(key)
+        return True
 
     # -- persistence -------------------------------------------------------- #
     def _load(self) -> list:
@@ -659,7 +672,6 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
         return "token"
 
     ceiling = time.monotonic() + max(30.0, getattr(args, "idle_timeout", 60) or 60)
-    stale_token_seen = False
     while not term.closed:
         line = term.read_line(deadline=ceiling)
         if line is None:
@@ -697,7 +709,8 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             else:
                 term.write_line("Paired - go ahead.")
             return "token"
-        if _looks_like_token(line) and not stale_token_seen:
+        if (_looks_like_token(line)
+                and pm.take_stale_token_exemption(peer)):
             # The client auto-sends its stored token as the first line on every
             # connect. When it doesn't match (revoked via --clear-paired, a
             # different bridge, a stale disk) DON'T count it as a wrong-CODE
@@ -705,7 +718,6 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             # frames, so a plain "wrong code" line is invisible. Push the LOCKED
             # prompt (a header frame) so the user can type the code, no strike.
             announce_code()
-            stale_token_seen = True
             if args.app:
                 _lock_header(term, ("Terminal for Claude Code",
                                     "LOCKED - type the pairing code",

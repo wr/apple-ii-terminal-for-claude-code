@@ -191,6 +191,24 @@ def test_only_first_stale_token_is_exempt_from_guess_cap(tmp_path):
     assert not pm.devices
 
 
+def test_stale_token_exemption_does_not_reset_on_reconnect(tmp_path):
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
+    pm.SLEEP_CAP = 0
+    peer = "10.0.0.5"
+
+    assert require_pairing(_FakeTerm([gen_token()], peer), _args(), pm) is False
+    assert pm._fails.get(peer) is None
+
+    for _ in range(pm.MAX_TRIES):
+        assert require_pairing(
+            _FakeTerm([gen_token()], peer), _args(), pm
+        ) is False
+
+    term = _FakeTerm(["ABC123"], peer)
+    assert require_pairing(term, _args(), pm) is False
+    assert pm._fails[peer][0] == pm.MAX_TRIES
+
+
 def test_token_shaped_pinned_code_is_checked_before_stale_token(tmp_path):
     code = gen_token()
     pm = PairingManager(code, store_path=str(tmp_path / "p.json"))
