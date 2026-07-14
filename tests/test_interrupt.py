@@ -4,6 +4,8 @@ Fakes the transport and the backend; runs the real Terminal + run_app_session.
 """
 import os, sys, threading, time, queue
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "bridge"))
 
@@ -19,20 +21,26 @@ class FakeChannel:
         self.rx = queue.Queue()   # bytes the "Apple II" sends us
         self.tx = bytearray()     # bytes we send the "Apple II"
         self.tx_lock = threading.Lock()
+        self.closed = False
 
     def feed(self, data: bytes):
         for b in data:
             self.rx.put(b)
 
     def read_byte(self):
+        if self.closed:
+            return None
         try:
-            return self.rx.get(timeout=0.2)
+            return self.rx.get(timeout=0.05)
         except queue.Empty:
             return -1
 
     def write(self, data: bytes):
         with self.tx_lock:
             self.tx.extend(data)
+
+    def close(self):
+        self.closed = True
 
 
 class SlowBackend:
@@ -59,9 +67,105 @@ class SlowBackend:
         yield "SHOULD NEVER ARRIVE"
 
 
+class BusyBackend(SlowBackend):
+    def __init__(self):
+        super().__init__()
+        self.cancel_event = threading.Event()
+        self.stop_event = threading.Event()
+
+    def cancel(self):
+        self.cancelled = True
+        self.cancel_event.set()
+
+    def stream(self, _user):
+        while not self.cancel_event.is_set() and not self.stop_event.is_set():
+            yield "x"
+            time.sleep(0.01)
+
+
 class Args:
     cols = 80
     app = True
+
+
+def test_ctrl_c_is_polled_while_chunks_are_continuous():
+    ch = FakeChannel()
+    term = Terminal(ch, TermConfig(width=80, echo=False, telnet=False))
+    backend = BusyBackend()
+    worker = threading.Thread(
+        target=bridge.run_app_session,
+        args=(term, Args(), backend, None, "code"),
+        daemon=True,
+    )
+    worker.start()
+    time.sleep(0.2)
+    ch.feed(b"hello\r")
+    time.sleep(0.2)
+    ch.feed(b"\x03")
+    try:
+        assert backend.cancel_event.wait(1), (
+            "continuous chunks starved Ctrl-C polling")
+    finally:
+        backend.stop_event.set()
+        ch.feed(b"/exit\r")
+        worker.join(3)
+
+
+def test_disconnect_cancels_and_joins_reply_worker():
+    ch = FakeChannel()
+    term = Terminal(ch, TermConfig(width=80, echo=False, telnet=False))
+    backend = BusyBackend()
+    session = threading.Thread(
+        target=bridge.run_app_session,
+        args=(term, Args(), backend, None, "code"),
+        daemon=True,
+    )
+    session.start()
+    ch.feed(b"hello\r")
+    time.sleep(0.2)
+    ch.close()
+    session.join(3)
+    assert not session.is_alive(), "session survived channel close"
+    assert backend.cancel_event.is_set(), "disconnect did not cancel backend"
+
+
+def test_host_interrupt_cancels_and_joins_reply_worker():
+    ch = FakeChannel()
+    ch.feed(b"hello\r")
+    term = Terminal(ch, TermConfig(width=80, echo=False, telnet=False))
+    backend = SlowBackend()
+
+    def host_interrupt():
+        raise KeyboardInterrupt
+
+    term.poll_ctrl_c = host_interrupt
+    with pytest.raises(KeyboardInterrupt):
+        bridge.run_app_session(term, Args(), backend, None, "code")
+    assert backend.cancelled, "host Ctrl-C left backend work running"
+
+
+def test_non_app_interrupt_cancels_synchronous_stream(monkeypatch):
+    class InterruptingBackend(SlowBackend):
+        def stream(self, _user):
+            yield "partial text"
+            raise KeyboardInterrupt
+
+    class PlainArgs:
+        telnet = False
+        idle_timeout = 0
+        backend = "code"
+        app = False
+        cols = 80
+
+    ch = FakeChannel()
+    ch.feed(b"hello\r")
+    term = Terminal(ch, TermConfig(width=80, echo=False, telnet=False))
+    backend = InterruptingBackend()
+    monkeypatch.setattr(bridge, "make_backend", lambda *_args: backend)
+
+    with pytest.raises(KeyboardInterrupt):
+        bridge.run_session(term, PlainArgs())
+    assert backend.cancelled, "non-app unwind left backend work running"
 
 
 def run():
@@ -108,5 +212,8 @@ def run():
 
 
 if __name__ == "__main__":
+    test_ctrl_c_is_polled_while_chunks_are_continuous()
+    test_disconnect_cancels_and_joins_reply_worker()
+    test_host_interrupt_cancels_and_joins_reply_worker()
     run()
     print("ALL PASS")

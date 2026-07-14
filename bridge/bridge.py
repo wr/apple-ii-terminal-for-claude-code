@@ -322,23 +322,37 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
             finally:
                 chunks.put(None)
 
-        threading.Thread(target=_pump, daemon=True).start()
+        worker = threading.Thread(target=_pump, daemon=True)
+        worker.start()
         interrupted = False
-        while True:
-            try:
-                chunk = chunks.get(timeout=0.2)
-            except queue.Empty:
-                # a lull: the only moment we touch the wire mid-turn
-                if not interrupted and term.poll_ctrl_c():
-                    interrupted = True
-                    backend.cancel()
-                if term.closed:
-                    backend.cancel()
-                    return
-                continue
-            if chunk is None:
-                break
-            lines.extend(fmt.feed(chunk))
+        finished = False
+        next_poll = time.monotonic()
+        try:
+            while True:
+                now = time.monotonic()
+                if now >= next_poll:
+                    next_poll = now + 0.05
+                    if not interrupted and term.poll_ctrl_c():
+                        interrupted = True
+                        backend.cancel()
+                    if term.closed:
+                        backend.cancel()
+                        return
+                wait = max(0.0, min(0.05, next_poll - time.monotonic()))
+                try:
+                    chunk = chunks.get(timeout=wait)
+                except queue.Empty:
+                    continue
+                if chunk is None:
+                    finished = True
+                    break
+                lines.extend(fmt.feed(chunk))
+        finally:
+            if not finished:
+                backend.cancel()
+            worker.join(timeout=3.0)
+            if worker.is_alive():
+                log("reply worker did not stop after cancellation", peer=peer)
         lines.extend(fmt.flush())
         send_header(term, backend)  # real header, drawn once by the client
         if lines:
@@ -785,12 +799,18 @@ def _run_session(term: Terminal, args, pm, guard) -> None:
         fmt = StreamFormatter(cols)
         nlines = 0
         t0 = time.monotonic()
-        for chunk in backend.stream(user):
-            for out_line in fmt.feed(chunk):
-                term.write_line(out_line)
-                nlines += 1
-            if term.closed:
-                return
+        turn_finished = False
+        try:
+            for chunk in backend.stream(user):
+                for out_line in fmt.feed(chunk):
+                    term.write_line(out_line)
+                    nlines += 1
+                if term.closed:
+                    return
+            turn_finished = True
+        finally:
+            if not turn_finished:
+                backend.cancel()
         for out_line in fmt.flush():
             term.write_line(out_line)
             nlines += 1
