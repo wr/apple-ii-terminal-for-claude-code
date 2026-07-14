@@ -403,9 +403,12 @@ class PairingManager:
     CLI running on this machine, so an unpaired caller must type the code
     printed at startup before the session proceeds. This bundles the brakes:
 
-      * a shared code that expires (the pairing WINDOW closes after `ttl`),
+      * a shared code with an expiring WINDOW: after `ttl` an auto-generated
+        code ROTATES to a fresh one (the window reopens); a user-set
+        --pair-code stays fixed,
       * per-peer exponential backoff and a hard guess cap (no brute force),
-      * a persisted set of already-paired peer IPs (reconnects don't re-ask).
+      * a persisted set of already-paired device token hashes (a reconnect
+        presents its token instead of re-typing the code).
 
     Attempt state is keyed by peer IP and lives for the process, so a peer
     that hangs up and redials keeps its strike count - it can't reset the
@@ -418,13 +421,25 @@ class PairingManager:
     MAX_TRIES = 10       # hard stop per peer per bridge run
 
     def __init__(self, code: str, ttl_secs: float,
-                 store_path: str | None = None) -> None:
+                 store_path: str | None = None, auto: bool = False) -> None:
         self.code = code
         self.ttl = ttl_secs                 # 0 = the window never closes
+        self.auto = auto                    # generated code -> may rotate on ttl
         self.born = time.monotonic()
+        self._lock = threading.Lock()       # guards code/born across rotation
         self.store_path = store_path or _pairing_store()
         self.devices = self._load()
         self._fails: dict = {}              # peer -> [count, locked_until]
+
+    def rotate(self) -> str:
+        """Mint a fresh code and reopen the window, returning the new code.
+        The rotator thread only calls this for auto-generated codes; a peer's
+        strike counts are deliberately left intact so rotation can't hand a
+        brute-forcer a clean slate."""
+        with self._lock:
+            self.code = gen_pair_code()
+            self.born = time.monotonic()
+            return self.code
 
     # -- persistence -------------------------------------------------------- #
     def _load(self) -> list:
@@ -502,8 +517,9 @@ class PairingManager:
     def check(self, peer, guess: str) -> bool:
         """Constant-time compare of the human code; storage happens on issue."""
         import secrets
-        ok = (self.window_open()
-              and secrets.compare_digest(guess, self.code))
+        with self._lock:                    # snapshot: a rotation may race us
+            code, open_ = self.code, self.window_open()
+        ok = open_ and secrets.compare_digest(guess, code)
         if ok:
             self._fails.pop(peer, None)
         return ok
@@ -867,9 +883,10 @@ def parse_args(argv=None):
                    help="pairing code callers must type once per device "
                         "(telnet default: a random 6-char code; see --no-pair)")
     p.add_argument("--pair-ttl", type=int, default=15, metavar="MIN",
-                   help="minutes the pairing window stays open to NEW devices "
-                        "(default 15; 0 = never expires). Paired devices are "
-                        "unaffected.")
+                   help="minutes before an auto-generated code rotates to a "
+                        "fresh one, reprinted to the console (default 15; 0 = "
+                        "never rotates). A --pair-code you set stays fixed. "
+                        "Already-paired devices are unaffected.")
     p.add_argument("--clear-paired", action="store_true",
                    help="forget all remembered (paired) devices at startup, "
                         "forcing every caller to re-pair")
@@ -912,6 +929,25 @@ def parse_args(argv=None):
     return args
 
 
+def _start_code_rotator(pm: PairingManager) -> threading.Thread:
+    """Roll an auto-generated pairing code to a fresh one every `ttl` seconds
+    and reprint it, so a new device can always enroll without restarting the
+    bridge. Already-paired devices are unaffected - they present a token, not
+    the code. Daemon thread: it dies with the process, no clean-up needed."""
+    mins = int(pm.ttl // 60)
+    win = f"{GRAY} (valid {mins} min for new devices){OFF}" if mins else ""
+
+    def _run() -> None:
+        while True:
+            time.sleep(pm.ttl)
+            code = pm.rotate()
+            log(f"pairing code rotated -> {BOLD}{CORAL}{code}{OFF}{win}")
+
+    t = threading.Thread(target=_run, name="code-rotator", daemon=True)
+    t.start()
+    return t
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     transport = build_transport(args)
@@ -927,9 +963,11 @@ def main(argv=None) -> int:
     # is a point-to-point link the user physically owns, so neither is gated.
     pm = None
     if args.telnet and not args.no_pair:
-        if not args.pair_code:
+        auto_code = not args.pair_code       # generated codes rotate; pinned don't
+        if auto_code:
             args.pair_code = gen_pair_code()
-        pm = PairingManager(args.pair_code, ttl_secs=args.pair_ttl * 60)
+        pm = PairingManager(args.pair_code, ttl_secs=args.pair_ttl * 60,
+                            auto=auto_code)
         if args.clear_paired:
             n = pm.clear_paired()
             log(f"revoked {n} remembered device(s)")
@@ -939,6 +977,8 @@ def main(argv=None) -> int:
         log(f"revoked {n} remembered device(s)")
 
     print_banner(args, transport, pm)
+    if pm and pm.ttl > 0 and pm.auto:
+        _start_code_rotator(pm)
     if args.telnet:
         log("waiting for the Apple II to connect...")
 

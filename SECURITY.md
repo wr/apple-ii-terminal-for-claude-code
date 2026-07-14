@@ -29,7 +29,7 @@ A listening bridge is gated by a pairing code before any session proceeds (`--te
 
 - A **6-character code** (uppercase + digits, look-alikes dropped; ~8.9e8 combinations) printed at startup. Set your own with `--pair-code`.
 - **Per-peer exponential backoff and a hard guess cap** — 3 free tries, then doubling delays, 10 attempts max per peer per run. Strike counts are keyed by IP and survive reconnects, so a caller can't reset them by redialing.
-- **An expiring window**: the code stops accepting new devices after `--pair-ttl` minutes (default 15; `0` never expires).
+- **A rotating window**: an auto-generated code rolls to a fresh one every `--pair-ttl` minutes (default 15; `0` never rotates), reprinted to the console, so a glimpsed code is only good for that window — while new devices can still enroll without restarting the bridge. A `--pair-code` you set yourself stays fixed. Already-paired devices are unaffected; they present their token, not the code.
 - **Revocation**: `--clear-paired` (or the startup flag) forgets every remembered device.
 
 Ongoing pairing/hardening work is tracked separately; this file describes what ships today.

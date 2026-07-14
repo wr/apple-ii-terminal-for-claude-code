@@ -66,12 +66,12 @@ class Args:
     cols = 80
 
 
-def make_pm(code="ABC234", ttl_secs=0):
+def make_pm(code="ABC234", ttl_secs=0, auto=False):
     """A manager with a throwaway store and no real throttling delay."""
     fd, path = tempfile.mkstemp(suffix=".json")
     os.close(fd)
     os.unlink(path)  # start with no file (a fresh, unpaired store)
-    pm = PairingManager(code, ttl_secs=ttl_secs, store_path=path)
+    pm = PairingManager(code, ttl_secs=ttl_secs, store_path=path, auto=auto)
     pm.SLEEP_CAP = 0.0  # don't actually sleep the backoff in tests
     return pm, path
 
@@ -183,6 +183,45 @@ class TestManager(unittest.TestCase):
             self.assertTrue(pm.window_open())
         finally:
             os.path.exists(path) and os.unlink(path)
+
+    def test_rotate_mints_new_code_and_reopens_window(self):
+        pm, path = make_pm("ABC234", ttl_secs=60)
+        try:
+            pm.born = time.monotonic() - 61        # window has closed
+            self.assertFalse(pm.window_open())
+            new = pm.rotate()
+            self.assertNotEqual(new, "ABC234")     # a fresh code
+            self.assertEqual(new, pm.code)
+            self.assertTrue(pm.window_open())       # window reopened
+            self.assertTrue(pm.check("p", new))     # new code pairs
+            self.assertFalse(pm.check("q", "ABC234"))  # old code is dead
+        finally:
+            os.path.exists(path) and os.unlink(path)
+
+    def test_rotate_keeps_strike_counts(self):
+        # Rotation must not hand a brute-forcer a clean slate: an exhausted
+        # peer stays exhausted across a code roll.
+        pm, path = make_pm("ABC234", ttl_secs=60)
+        try:
+            for _ in range(pm.MAX_TRIES):
+                pm.record_failure("p")
+            self.assertTrue(pm.exhausted("p"))
+            pm.rotate()
+            self.assertTrue(pm.exhausted("p"))
+        finally:
+            os.path.exists(path) and os.unlink(path)
+
+    def test_auto_flag_gates_rotation(self):
+        # A user-pinned code is not auto (the rotator thread never starts);
+        # a generated code is.
+        pinned, p1 = make_pm("ABC234")
+        gen, p2 = make_pm("ABC234", auto=True)
+        try:
+            self.assertFalse(pinned.auto)
+            self.assertTrue(gen.auto)
+        finally:
+            os.path.exists(p1) and os.unlink(p1)
+            os.path.exists(p2) and os.unlink(p2)
 
     def test_revocation_and_persistence(self):
         # Trust now lives in an issued token's hash, not a peer IP - exercise
