@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import queue
+import secrets
 import sys
 import threading
 import time
@@ -644,7 +645,21 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                 f"{BOLD}{CORAL}{pm.code_for(peer)}{OFF}", peer=peer)
             announced = True
 
+    def accept_code():
+        pm.consume_code(peer)
+        if args.app:
+            tok = pm.issue_token(peer)
+            # Do not terminate this frame here. run_app_session sends the
+            # version header before EOT, while the client is still listening.
+            term.write(CMD_TOKEN + tok.encode("ascii") + b"\r")
+            log("paired; issued token", peer=peer)
+            return "code"
+        log("paired (code)", peer=peer)
+        term.write_line("Paired - go ahead.")
+        return "token"
+
     ceiling = time.monotonic() + max(30.0, getattr(args, "idle_timeout", 60) or 60)
+    stale_token_seen = False
     while not term.closed:
         line = term.read_line(deadline=ceiling)
         if line is None:
@@ -663,6 +678,18 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                                     "(it's on the bridge console)"))
                 prompted = True
             continue
+        # A pinned code is explicitly user-controlled and may happen to have
+        # the same shape as a device token. Honor an exact code match before
+        # treating token-shaped input as a stale credential.
+        if pm.pinned and secrets.compare_digest(line.upper(), pm.pinned):
+            if pm.exhausted(peer):
+                log("guess cap reached - locked out", peer=peer)
+                term.write_line("Too many wrong codes. Restart the bridge to retry.")
+                if args.app:
+                    term.write(EOT)
+                return False
+            pm._fails.pop(peer, None)
+            return accept_code()
         if pm.check_token(line):  # a client auto-presenting its stored token
             log("paired (token)", peer=peer)
             if args.app:
@@ -670,7 +697,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             else:
                 term.write_line("Paired - go ahead.")
             return "token"
-        if _looks_like_token(line):
+        if _looks_like_token(line) and not stale_token_seen:
             # The client auto-sends its stored token as the first line on every
             # connect. When it doesn't match (revoked via --clear-paired, a
             # different bridge, a stale disk) DON'T count it as a wrong-CODE
@@ -678,6 +705,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             # frames, so a plain "wrong code" line is invisible. Push the LOCKED
             # prompt (a header frame) so the user can type the code, no strike.
             announce_code()
+            stale_token_seen = True
             if args.app:
                 _lock_header(term, ("Terminal for Claude Code",
                                     "LOCKED - type the pairing code",
@@ -698,22 +726,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                 term.write(EOT)
             return False
         if pm.check(peer, line.upper()):  # code alphabet is uppercase-only
-            pm.consume_code(peer)  # single-use: this code can't pair again
-            if args.app:
-                tok = pm.issue_token(peer)
-                # Send the token frame WITHOUT a terminating EOT. The client
-                # typed the code and is in its reply-reader (recv_reply); if we
-                # sent EOT here it would return and then go deaf writing the
-                # token, dropping the version-string header that run_app_session
-                # sends next. Instead run_app_session sends the header THEN the
-                # EOT (see pair_via == "code"), so the header renders first.
-                term.write(CMD_TOKEN + tok.encode("ascii") + b"\r")
-                log("paired; issued token", peer=peer)
-                return "code"
-            else:
-                log("paired (code)", peer=peer)
-                term.write_line("Paired - go ahead.")
-            return "token"
+            return accept_code()
         wait = pm.record_failure(peer)
         strikes = pm._fails[peer][0]
         left = pm.MAX_TRIES - strikes

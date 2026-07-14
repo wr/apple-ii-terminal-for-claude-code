@@ -179,6 +179,27 @@ def test_stale_token_prompts_for_code_without_strike(tmp_path):
     assert bytes(CMD_TOKEN) in term.written              # fresh token issued
 
 
+def test_only_first_stale_token_is_exempt_from_guess_cap(tmp_path):
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
+    pm.SLEEP_CAP = 0
+    stale = gen_token()
+    lines = [stale] + [gen_token() for _ in range(pm.MAX_TRIES)] + ["ABC123"]
+    term = _FakeTerm(lines)
+
+    assert require_pairing(term, _args(), pm) is False
+    assert pm._fails["10.0.0.5"][0] == pm.MAX_TRIES
+    assert not pm.devices
+
+
+def test_token_shaped_pinned_code_is_checked_before_stale_token(tmp_path):
+    code = gen_token()
+    pm = PairingManager(code, store_path=str(tmp_path / "p.json"))
+    term = _FakeTerm([code])
+
+    assert require_pairing(term, _args(app=False), pm) == "token"
+    assert pm._fails.get("10.0.0.5") is None
+
+
 def test_code_pairing_defers_eot_to_after_header(tmp_path):
     # Bug E: require_pairing must send the CMD_TOKEN frame WITHOUT a trailing
     # EOT on the code path (an EOT here would end the client's recv_reply before

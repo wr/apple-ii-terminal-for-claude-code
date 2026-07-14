@@ -19,9 +19,10 @@ observer. Possession of a stored token is the credential; it is not proof of a
 particular physical device.
 
 The implemented stale-token fallback also differs from the original flow below:
-an unrecognized 32-character token-shaped value prompts for the current code but
-does not consume a guess strike. The rest of this document records the approved
-token-storage design and should be read with this amendment.
+the first unrecognized 32-character token-shaped value prompts for the current
+code but does not consume a guess strike. Further token-shaped misses in that
+connection count as code guesses. The rest of this document records the
+approved token-storage design and should be read with this amendment.
 
 ## Problem
 
@@ -241,8 +242,8 @@ along in the same branch as a separate commit:
 
 ## Security properties
 
-- Token is 160-bit unguessable; online guessing is infeasible and still bounded
-  by the existing per-peer lockout.
+- The 32-character, 31-symbol token carries about 158 bits of entropy; online
+  guessing is infeasible and still bounded after the one stale-token exemption.
 - Bridge stores `sha256(token)` plus first-IP and pairing-time metadata; a leaked
   `paired.json` yields no plaintext usable credential and no IPs-as-trust.
 - Constant-time comparison; token never logged.
