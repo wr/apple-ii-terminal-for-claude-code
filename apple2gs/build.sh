@@ -45,7 +45,7 @@ $DOS33 -y CLAUDE.dsk DELETE HELLO
 $DOS33 -y CLAUDE.dsk SAVE A HH HELLO
 $DOS33 -a 0x4000 CLAUDE.dsk BSAVE COBJ COBJ
 $DOS33 -a 0x2000 CLAUDE.dsk BSAVE COBJ8 COBJ8
-python3 "$(dirname "$0")/reserve_token_sector.py" CLAUDE.dsk
+python3 reserve_token_sector.py CLAUDE.dsk
 $DOS33 CLAUDE.dsk CATALOG
 # Opt-in convenience deploy for KEGS (~/config.kegs boots ~/Downloads/CLAUDE.dsk).
 # Off by default so a plain build never writes outside the repo; enable with
