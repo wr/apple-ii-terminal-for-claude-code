@@ -446,6 +446,14 @@ class PairingManager:
             self._codes[key] = code
         return code
 
+    def consume_code(self, peer) -> None:
+        """A generated code is single-use: drop it the moment it mints a token,
+        so it can never enroll a second device. The next caller from this IP
+        gets a fresh code. A pinned --pair-code is explicitly shared, so it is
+        left in place."""
+        if not self.pinned:
+            self._codes.pop(peer or "?", None)
+
     # -- persistence -------------------------------------------------------- #
     def _load(self) -> list:
         try:
@@ -611,6 +619,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                 term.write(EOT)
             return False
         if pm.check(peer, line.upper()):  # code alphabet is uppercase-only
+            pm.consume_code(peer)  # single-use: this code can't pair again
             if args.app:
                 tok = pm.issue_token(peer)
                 # Send the token frame WITHOUT a terminating EOT. The client
