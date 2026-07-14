@@ -13,7 +13,7 @@ Fixes land on the latest 1.0.x release.
 
 ## Reporting a vulnerability
 
-Open a [GitHub issue](https://github.com/wr/apple-ii-terminal-for-claude-code/issues). For anything you'd rather not post in the open, use GitHub's private ["Report a vulnerability"](https://github.com/wr/apple-ii-terminal-for-claude-code/security/advisories/new) advisory flow, or email the maintainer at media [at] wells [dot] ee. I'll respond as soon as I can — this is a hobby project, so no formal SLA.
+Open a [GitHub issue](https://github.com/wr/apple-ii-terminal-for-claude-code/issues). For anything you'd rather not post in the open, use GitHub's private ["Report a vulnerability"](https://github.com/wr/apple-ii-terminal-for-claude-code/security/advisories/new) advisory flow, or email the maintainer at `hi [at] wells [dot] ee`. I'll respond as soon as I can — this is a hobby project, so no formal SLA.
 
 ## Security model
 
