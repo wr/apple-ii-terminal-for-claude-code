@@ -65,14 +65,14 @@ def _args(**kw):
 
 
 def test_valid_token_first_line_pairs_without_code(tmp_path):
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     tok = pm.issue_token("10.0.0.5")
     term = _FakeTerm([tok])
     assert require_pairing(term, _args(), pm) == "token"
 
 
 def test_first_run_code_issues_token_frame(tmp_path):
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     term = _FakeTerm(["", "ABC123"])  # blank line (prompt), then the code
     assert require_pairing(term, _args(), pm) == "code"
     # A CMD_TOKEN frame (0x05 + 32 chars + CR) was written to the client.
@@ -84,21 +84,26 @@ def test_first_run_code_issues_token_frame(tmp_path):
 
 
 def test_wrong_token_falls_through_to_code(tmp_path):
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     term = _FakeTerm(["ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", "ABC123"])
     assert require_pairing(term, _args(), pm)
 
 
-def test_valid_token_pairs_after_window_closes(tmp_path):
-    # A previously-paired device presenting its stored token must still get
-    # in after the pairing window has expired - the window only gates NEW
-    # (code-based) pairing, never token presentation.
-    pm = PairingManager("ABC123", ttl_secs=60, store_path=str(tmp_path / "p.json"))
+def test_per_ip_code_shown_only_when_a_device_needs_it(tmp_path):
+    # A paired device presents its token and never triggers a code, so its IP
+    # never enters the per-IP map. An unpaired device does.
+    pm = PairingManager(store_path=str(tmp_path / "p.json"))  # per-IP (unpinned)
     tok = pm.issue_token("10.0.0.5")
-    pm.born = time.monotonic() - 3600   # force the window closed
-    assert pm.window_open() is False
     term = _FakeTerm([tok])
-    assert require_pairing(term, _args(), pm)
+    term.ch.peer = "10.0.0.5"
+    assert require_pairing(term, _args(), pm) == "token"
+    assert "10.0.0.5" not in pm._codes           # paired device: no code minted
+
+    # A different, unpaired device gets a code minted for its IP.
+    code = pm.code_for("10.0.0.9")
+    term2 = _FakeTerm(["", code])
+    term2.ch.peer = "10.0.0.9"
+    assert require_pairing(term2, _args(), pm) == "code"
 
 
 def test_looks_like_token_shape():
@@ -144,7 +149,7 @@ def test_stale_token_prompts_for_code_without_strike(tmp_path):
     # the first line. The bridge doesn't recognize it - but must NOT count it
     # as a wrong-code strike (the idle client can't see plain text); it must
     # push the LOCKED header prompt so the user can type the code.
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     stale = gen_token()  # a token pm has never issued
     term = _FakeTerm([stale, "ABC123"])  # stale token, then the real code
     assert require_pairing(term, _args(), pm)
@@ -158,7 +163,7 @@ def test_code_pairing_defers_eot_to_after_header(tmp_path):
     # EOT on the code path (an EOT here would end the client's recv_reply before
     # the version-string header). It returns "code" so run_app_session knows to
     # terminate later.
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     term = _FakeTerm(["", "ABC123"])
     assert require_pairing(term, _args(), pm) == "code"
     assert bytes(CMD_TOKEN) in term.written

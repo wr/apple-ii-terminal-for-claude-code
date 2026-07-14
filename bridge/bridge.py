@@ -134,11 +134,14 @@ def print_banner(args, transport, pm=None) -> None:
         row(transport.describe())
     if pm:
         row()
-        row(f"pairing code: {pm.code}",
-            f"{GRAY}pairing code: {OFF}{BOLD}{CORAL}{pm.code}{OFF}")
-        if pm.ttl > 0:
-            row(f"valid {int(pm.ttl // 60)} min for new devices",
-                f"{GRAY}valid {int(pm.ttl // 60)} min for new devices{OFF}")
+        if pm.pinned:
+            row(f"pairing code: {pm.pinned}",
+                f"{GRAY}pairing code: {OFF}{BOLD}{CORAL}{pm.pinned}{OFF}")
+        else:
+            row("a pairing code is shown here",
+                f"{GRAY}a pairing code is shown here{OFF}")
+            row("when a new device connects",
+                f"{GRAY}when a new device connects{OFF}")
     elif args.telnet:  # --no-pair
         row()
         row("PAIRING OFF - anyone who can reach",
@@ -403,9 +406,9 @@ class PairingManager:
     CLI running on this machine, so an unpaired caller must type the code
     printed at startup before the session proceeds. This bundles the brakes:
 
-      * a shared code with an expiring WINDOW: after `ttl` an auto-generated
-        code ROTATES to a fresh one (the window reopens); a user-set
-        --pair-code stays fixed,
+      * a per-device pairing code: a user-set --pair-code is shared by all
+        callers, otherwise each source IP gets its own code, minted on first
+        sight and printed to the bridge console when that device connects,
       * per-peer exponential backoff and a hard guess cap (no brute force),
       * a persisted set of already-paired device token hashes (a reconnect
         presents its token instead of re-typing the code).
@@ -419,27 +422,31 @@ class PairingManager:
     BACKOFF_CAP = 60.0   # ceiling on the computed wait
     SLEEP_CAP = 8.0      # never actually block a connection longer than this
     MAX_TRIES = 10       # hard stop per peer per bridge run
+    MAX_CODES = 256      # cap the per-IP code map so spoofed IPs can't grow it
 
-    def __init__(self, code: str, ttl_secs: float,
-                 store_path: str | None = None, auto: bool = False) -> None:
-        self.code = code
-        self.ttl = ttl_secs                 # 0 = the window never closes
-        self.auto = auto                    # generated code -> may rotate on ttl
-        self.born = time.monotonic()
-        self._lock = threading.Lock()       # guards code/born across rotation
+    def __init__(self, pinned: str = "",
+                 store_path: str | None = None) -> None:
+        self.pinned = pinned                # user --pair-code: one code for all
+        self._codes: dict = {}              # peer IP -> its own code (unpinned)
         self.store_path = store_path or _pairing_store()
         self.devices = self._load()
         self._fails: dict = {}              # peer -> [count, locked_until]
 
-    def rotate(self) -> str:
-        """Mint a fresh code and reopen the window, returning the new code.
-        The rotator thread only calls this for auto-generated codes; a peer's
-        strike counts are deliberately left intact so rotation can't hand a
-        brute-forcer a clean slate."""
-        with self._lock:
-            self.code = gen_pair_code()
-            self.born = time.monotonic()
-            return self.code
+    def code_for(self, peer) -> str:
+        """The code this peer must type. A pinned --pair-code is the same for
+        everyone; otherwise each IP gets its own, generated on first sight and
+        fixed for the run. The map is capped so a peer reconnecting from many
+        (spoofable) addresses can't grow it without bound."""
+        if self.pinned:
+            return self.pinned
+        key = peer or "?"
+        code = self._codes.get(key)
+        if code is None:
+            if len(self._codes) >= self.MAX_CODES:
+                self._codes.pop(next(iter(self._codes)))  # evict the oldest
+            code = gen_pair_code()
+            self._codes[key] = code
+        return code
 
     # -- persistence -------------------------------------------------------- #
     def _load(self) -> list:
@@ -471,10 +478,7 @@ class PairingManager:
         self._save()
         return n
 
-    # -- window / state queries -------------------------------------------- #
-    def window_open(self) -> bool:
-        return self.ttl <= 0 or (time.monotonic() - self.born) < self.ttl
-
+    # -- guess throttling --------------------------------------------------- #
     def locked_for(self, peer) -> float:
         """Seconds this peer must still wait before its next guess counts."""
         st = self._fails.get(peer)
@@ -515,11 +519,9 @@ class PairingManager:
         return tok
 
     def check(self, peer, guess: str) -> bool:
-        """Constant-time compare of the human code; storage happens on issue."""
+        """Constant-time compare against this peer's code; storage on issue."""
         import secrets
-        with self._lock:                    # snapshot: a rotation may race us
-            code, open_ = self.code, self.window_open()
-        ok = open_ and secrets.compare_digest(guess, code)
+        ok = secrets.compare_digest(guess, self.code_for(peer))
         if ok:
             self._fails.pop(peer, None)
         return ok
@@ -535,16 +537,28 @@ def _lock_header(term: Terminal, lines) -> None:
 
 def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
     """Gate a listening bridge behind the manager's code. Returns False if the
-    caller hung up, was locked out, or the pairing window had already closed."""
+    caller hung up or was locked out."""
     peer = getattr(term.ch, "peer", None)
-    log("waiting for the pairing code", peer=peer)  # code is in the startup banner
     # Don't push the prompt proactively: on a native client the connect
     # happens while the user is still on the boot menu, whose buffer drain
     # discards unsolicited bytes - the prompt would be eaten and the lock
     # would look silent. Instead, answer the FIRST real line with the prompt
     # (the client is in its reply-reader by then and renders it), and end
     # every answer with EOT so it never hangs.
-    prompted = False
+    prompted = False    # has the CLIENT been shown a prompt (drives msg wording)
+    announced = False   # has this device's code hit the CONSOLE yet
+
+    def announce_code() -> None:
+        # Print this device's code to the console the first time it needs one -
+        # NOT on connect, so an already-paired device (which just presents its
+        # token) never triggers a code or grows the per-IP map. Kept separate
+        # from `prompted` so it doesn't disturb the client-facing message.
+        nonlocal announced
+        if not announced:
+            log(f"waiting for the pairing code: "
+                f"{BOLD}{CORAL}{pm.code_for(peer)}{OFF}", peer=peer)
+            announced = True
+
     ceiling = time.monotonic() + max(30.0, getattr(args, "idle_timeout", 60) or 60)
     while not term.closed:
         line = term.read_line(deadline=ceiling)
@@ -558,6 +572,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             continue  # ...and neither is the modem's own announcement
         if not line:
             if args.app and not prompted:
+                announce_code()
                 _lock_header(term, ("Terminal for Claude Code",
                                     "LOCKED - type the pairing code",
                                     "(it's on the bridge console)"))
@@ -570,16 +585,6 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             else:
                 term.write_line("Paired - go ahead.")
             return "token"
-        if not pm.window_open():   # window gates NEW (code) pairing only
-            log("pairing window closed - refusing new device", peer=peer)
-            if args.app:
-                _lock_header(term, ("Terminal for Claude Code",
-                                    "PAIRING CLOSED - restart the bridge",
-                                    "to enroll a new device"))
-                term.write(EOT)
-            else:
-                term.write_line("Pairing window closed - restart the bridge.")
-            return False
         if _looks_like_token(line):
             # The client auto-sends its stored token as the first line on every
             # connect. When it doesn't match (revoked via --clear-paired, a
@@ -587,7 +592,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
             # guess: the client is idle in its main loop and only renders header
             # frames, so a plain "wrong code" line is invisible. Push the LOCKED
             # prompt (a header frame) so the user can type the code, no strike.
-            log("unrecognized token - prompting for code", peer=peer)
+            announce_code()
             if args.app:
                 _lock_header(term, ("Terminal for Claude Code",
                                     "LOCKED - type the pairing code",
@@ -597,6 +602,10 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
                 term.write_line("Unrecognized device. Type the pairing code.")
             prompted = True
             continue
+        # A real code guess: make sure this peer's code has hit the console at
+        # least once (a raw-telnet client sends neither a blank probe nor a
+        # token, so this is where its code first gets minted and printed).
+        announce_code()
         if pm.exhausted(peer):
             log("guess cap reached - locked out", peer=peer)
             term.write_line("Too many wrong codes. Restart the bridge to retry.")
@@ -858,9 +867,9 @@ def parse_args(argv=None):
         epilog="SECURITY: --telnet exposes a Claude session (in code mode, a\n"
                "shell on this host) to your network. It is meant for a TRUSTED\n"
                "HOME LAN only - never port-forward it or bind it to a public\n"
-               "interface. Callers are gated by a one-time pairing code with\n"
-               "attempt lockout and an expiring window; --no-pair removes that\n"
-               "gate (trusted, isolated networks only).")
+               "interface. Callers are gated by a per-device pairing code with\n"
+               "attempt lockout; --no-pair removes that gate (trusted,\n"
+               "isolated networks only).")
 
     tr = p.add_mutually_exclusive_group()
     tr.add_argument("--serial", metavar="PORT",
@@ -880,13 +889,9 @@ def parse_args(argv=None):
                         "LAN; set to a specific IP or 127.0.0.1 to narrow it)")
     p.add_argument("--port", type=int, default=6400, help="telnet port (default 6400)")
     p.add_argument("--pair-code", default="",
-                   help="pairing code callers must type once per device "
-                        "(telnet default: a random 6-char code; see --no-pair)")
-    p.add_argument("--pair-ttl", type=int, default=15, metavar="MIN",
-                   help="minutes before an auto-generated code rotates to a "
-                        "fresh one, reprinted to the console (default 15; 0 = "
-                        "never rotates). A --pair-code you set stays fixed. "
-                        "Already-paired devices are unaffected.")
+                   help="fix ONE pairing code for every caller (telnet default: "
+                        "a per-device code, shown on the console when each "
+                        "device connects; see --no-pair)")
     p.add_argument("--clear-paired", action="store_true",
                    help="forget all remembered (paired) devices at startup, "
                         "forcing every caller to re-pair")
@@ -929,25 +934,6 @@ def parse_args(argv=None):
     return args
 
 
-def _start_code_rotator(pm: PairingManager) -> threading.Thread:
-    """Roll an auto-generated pairing code to a fresh one every `ttl` seconds
-    and reprint it, so a new device can always enroll without restarting the
-    bridge. Already-paired devices are unaffected - they present a token, not
-    the code. Daemon thread: it dies with the process, no clean-up needed."""
-    mins = int(pm.ttl // 60)
-    win = f"{GRAY} (valid {mins} min for new devices){OFF}" if mins else ""
-
-    def _run() -> None:
-        while True:
-            time.sleep(pm.ttl)
-            code = pm.rotate()
-            log(f"pairing code rotated -> {BOLD}{CORAL}{code}{OFF}{win}")
-
-    t = threading.Thread(target=_run, name="code-rotator", daemon=True)
-    t.start()
-    return t
-
-
 def main(argv=None) -> int:
     args = parse_args(argv)
     transport = build_transport(args)
@@ -963,22 +949,18 @@ def main(argv=None) -> int:
     # is a point-to-point link the user physically owns, so neither is gated.
     pm = None
     if args.telnet and not args.no_pair:
-        auto_code = not args.pair_code       # generated codes rotate; pinned don't
-        if auto_code:
-            args.pair_code = gen_pair_code()
-        pm = PairingManager(args.pair_code, ttl_secs=args.pair_ttl * 60,
-                            auto=auto_code)
+        # An empty --pair-code means per-IP codes, minted and printed to the
+        # console the first time each device needs one (see code_for).
+        pm = PairingManager(args.pair_code)
         if args.clear_paired:
             n = pm.clear_paired()
             log(f"revoked {n} remembered device(s)")
     elif args.clear_paired:
         # honour --clear-paired even alongside --no-pair or a re-run to reset
-        n = PairingManager("", 0).clear_paired()
+        n = PairingManager("").clear_paired()
         log(f"revoked {n} remembered device(s)")
 
     print_banner(args, transport, pm)
-    if pm and pm.ttl > 0 and pm.auto:
-        _start_code_rotator(pm)
     if args.telnet:
         log("waiting for the Apple II to connect...")
 

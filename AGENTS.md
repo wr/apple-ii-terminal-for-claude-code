@@ -44,7 +44,7 @@ python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
 - `--app` enables the native-client protocol (bridge stays silent, frames replies with `EOT` = `0x04`). Required for both native clients.
 - `--backend code` runs the real `claude` CLI on the host; `--backend chat` (default) is Messages-API Q&A.
 - Serial hardware instead of KEGS: `--serial /dev/tty.usbserial-XXXX --baud 9600`.
-- A listening bridge (`--telnet`) locks itself behind a 6-character pairing code (attempt backoff, expiry, revocation). Trust is a client-held device token, not a peer IP: a correct code mints a 32-char token (issued once, in `--app` mode, via a `CMD_TOKEN` frame), and only its SHA-256 hash persists in `~/.config/claude-ii-terminal/paired.json` — presenting that token as the session's first line pairs a reconnect without re-asking for the code. An auto-generated code rotates every `--pair-ttl` min (default 15) and is reprinted to the console, so a new device can enroll without a bridge restart; a user-set `--pair-code` stays fixed. `--no-pair` disables.
+- A listening bridge (`--telnet`) locks itself behind a 6-character pairing code (attempt backoff, expiry, revocation). Trust is a client-held device token, not a peer IP: a correct code mints a 32-char token (issued once, in `--app` mode, via a `CMD_TOKEN` frame), and only its SHA-256 hash persists in `~/.config/claude-ii-terminal/paired.json` — presenting that token as the session's first line pairs a reconnect without re-asking for the code. The 6-char code is per-device by default (each source IP gets its own, printed to the console when that device connects, via `code_for`); `--pair-code` fixes one shared code instead. `--no-pair` disables.
 
 ## The edit → see-it loop
 

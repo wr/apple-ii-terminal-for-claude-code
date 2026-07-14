@@ -33,9 +33,9 @@ Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones t
    python3 ./bridge.py --telnet --app --backend code --workdir ~/your-project
    ```
 
-   It prints a 6-character pairing code and listens on TCP 6400. The first thing a new device sends must be that code. Once paired, the bridge hands the client a private device token it stores on its own boot disk and presents automatically on every future connect — so it never needs the code again, even across reboots. An unattended code rotates every 15 minutes (`--pair-ttl`), so enrolling a new device later doesn't need a restart. `--workdir` is the project Claude Code works in — in code mode it reads and writes files and runs commands in that directory, so point it at the repo you actually want on the wire.
+   It listens on TCP 6400 and prints a 6-character pairing code to its console the moment a new device connects (each device gets its own code). The first thing that device sends must be that code. Once paired, the bridge hands the client a private device token it stores on its own boot disk and presents automatically on every future connect — so it never needs the code again, even across reboots. `--workdir` is the project Claude Code works in — in code mode it reads and writes files and runs commands in that directory, so point it at the repo you actually want on the wire.
 
-   > **Trusted LAN only.** `--telnet` exposes a Claude session (in code mode, a shell on the host) to your network. Run it on a home LAN you trust and never port-forward it or bind it to a public interface. See [pairing flags](#advanced-bridge-options) to rotate, expire, or revoke access.
+   > **Trusted LAN only.** `--telnet` exposes a Claude session (in code mode, a shell on the host) to your network. Run it on a home LAN you trust and never port-forward it or bind it to a public interface. See [pairing flags](#advanced-bridge-options) to set a shared code or revoke access.
 
    > **What the bridge records.** Every prompt you type from the Apple II prints to the bridge's own console (replies are logged as metadata only, not text). For each paired device the bridge stores only a SHA-256 hash of its token in `~/.config/claude-ii-terminal/paired.json` — never the token itself; peer IPs are logged for visibility but never trusted as identity. Nothing leaves your machine except the conversation with Claude. Full picture in [SECURITY.md](SECURITY.md).
 
@@ -113,8 +113,7 @@ python3 bridge.py --telnet --app --backend code --workdir ~/project
 
 | Flag | Use |
 |---|---|
-| `--pair-code CODE` | Set the code yourself (default: a random 6-char code) |
-| `--pair-ttl MIN` | Minutes before an auto-generated code rotates to a fresh one (default 15; `0` = never rotates). A `--pair-code` you set stays fixed. |
+| `--pair-code CODE` | Fix one code for every device (default: a per-device code shown on the console when each connects) |
 | `--clear-paired` | Forget every remembered device at startup |
 | `--no-pair` | Drop the pairing gate entirely (isolated networks only) |
 | `--host ADDR` | Bind address (default `0.0.0.0`; set `127.0.0.1` to keep it local) |

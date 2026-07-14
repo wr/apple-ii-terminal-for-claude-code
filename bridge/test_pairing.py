@@ -3,7 +3,7 @@
 Covers the protections added for the "weak pairing" hardening pass:
   * higher-entropy, Apple II-typeable pairing codes
   * per-peer wrong-code lockout with exponential backoff + a hard guess cap
-  * an expiring pairing window (the code times out for NEW devices)
+  * per-device pairing codes (each source IP gets its own, or a pinned code)
   * revocation of remembered (paired) peers
   * bounded input length on the terminal read path
 
@@ -66,12 +66,13 @@ class Args:
     cols = 80
 
 
-def make_pm(code="ABC234", ttl_secs=0, auto=False):
-    """A manager with a throwaway store and no real throttling delay."""
+def make_pm(code="ABC234", pinned=True):
+    """A manager with a throwaway store and no real throttling delay. `pinned`
+    fixes one code for all peers; pinned=False gives per-IP codes."""
     fd, path = tempfile.mkstemp(suffix=".json")
     os.close(fd)
     os.unlink(path)  # start with no file (a fresh, unpaired store)
-    pm = PairingManager(code, ttl_secs=ttl_secs, store_path=path, auto=auto)
+    pm = PairingManager(code if pinned else "", store_path=path)
     pm.SLEEP_CAP = 0.0  # don't actually sleep the backoff in tests
     return pm, path
 
@@ -164,64 +165,40 @@ class TestManager(unittest.TestCase):
         finally:
             os.path.exists(path) and os.unlink(path)
 
-    def test_window_expiry(self):
-        pm, path = make_pm("ABC234", ttl_secs=60)
+    def test_pinned_code_same_for_every_peer(self):
+        pm, path = make_pm("ABC234")            # pinned
         try:
-            self.assertTrue(pm.window_open())
-            self.assertTrue(pm.check("p", "ABC234"))
-            # now roll the clock past the window: even a correct code fails
-            pm.born = time.monotonic() - 61
-            self.assertFalse(pm.window_open())
-            self.assertFalse(pm.check("q", "ABC234"))
+            self.assertEqual(pm.code_for("10.0.0.1"), "ABC234")
+            self.assertEqual(pm.code_for("10.0.0.2"), "ABC234")
+            self.assertTrue(pm.check("10.0.0.1", "ABC234"))
         finally:
             os.path.exists(path) and os.unlink(path)
 
-    def test_ttl_zero_never_closes(self):
-        pm, path = make_pm("ABC234", ttl_secs=0)
+    def test_per_ip_codes_differ_and_are_stable(self):
+        pm, path = make_pm(pinned=False)        # per-IP
         try:
-            pm.born = time.monotonic() - 10_000
-            self.assertTrue(pm.window_open())
+            c1 = pm.code_for("10.0.0.1")
+            c2 = pm.code_for("10.0.0.2")
+            self.assertNotEqual(c1, c2)          # each IP its own code
+            self.assertEqual(pm.code_for("10.0.0.1"), c1)  # stable for the run
+            self.assertTrue(pm.check("10.0.0.1", c1))       # its code pairs it
+            self.assertFalse(pm.check("10.0.0.1", c2))      # not another's code
         finally:
             os.path.exists(path) and os.unlink(path)
 
-    def test_rotate_mints_new_code_and_reopens_window(self):
-        pm, path = make_pm("ABC234", ttl_secs=60)
+    def test_per_ip_map_is_capped(self):
+        pm, path = make_pm(pinned=False)
+        pm.MAX_CODES = 4
         try:
-            pm.born = time.monotonic() - 61        # window has closed
-            self.assertFalse(pm.window_open())
-            new = pm.rotate()
-            self.assertNotEqual(new, "ABC234")     # a fresh code
-            self.assertEqual(new, pm.code)
-            self.assertTrue(pm.window_open())       # window reopened
-            self.assertTrue(pm.check("p", new))     # new code pairs
-            self.assertFalse(pm.check("q", "ABC234"))  # old code is dead
+            first = pm.code_for("ip0")
+            for i in range(1, 6):               # push well past the cap
+                pm.code_for(f"ip{i}")
+            self.assertLessEqual(len(pm._codes), pm.MAX_CODES)
+            self.assertNotIn("ip0", pm._codes)   # oldest was evicted
+            # the evicted peer simply gets a fresh code next time
+            self.assertNotEqual(pm.code_for("ip0"), first)
         finally:
             os.path.exists(path) and os.unlink(path)
-
-    def test_rotate_keeps_strike_counts(self):
-        # Rotation must not hand a brute-forcer a clean slate: an exhausted
-        # peer stays exhausted across a code roll.
-        pm, path = make_pm("ABC234", ttl_secs=60)
-        try:
-            for _ in range(pm.MAX_TRIES):
-                pm.record_failure("p")
-            self.assertTrue(pm.exhausted("p"))
-            pm.rotate()
-            self.assertTrue(pm.exhausted("p"))
-        finally:
-            os.path.exists(path) and os.unlink(path)
-
-    def test_auto_flag_gates_rotation(self):
-        # A user-pinned code is not auto (the rotator thread never starts);
-        # a generated code is.
-        pinned, p1 = make_pm("ABC234")
-        gen, p2 = make_pm("ABC234", auto=True)
-        try:
-            self.assertFalse(pinned.auto)
-            self.assertTrue(gen.auto)
-        finally:
-            os.path.exists(p1) and os.unlink(p1)
-            os.path.exists(p2) and os.unlink(p2)
 
     def test_revocation_and_persistence(self):
         # Trust now lives in an issued token's hash, not a peer IP - exercise
@@ -232,12 +209,12 @@ class TestManager(unittest.TestCase):
             tok = pm.issue_token("p")
             self.assertTrue(pm.check_token(tok))
             # a fresh manager on the same store still recognizes the token...
-            pm2 = PairingManager("ABC234", 0, store_path=path)
+            pm2 = PairingManager("ABC234", store_path=path)
             self.assertTrue(pm2.check_token(tok))
             # ...until revoked
             self.assertEqual(pm2.clear_paired(), 1)
             self.assertFalse(pm2.check_token(tok))
-            pm3 = PairingManager("ABC234", 0, store_path=path)
+            pm3 = PairingManager("ABC234", store_path=path)
             self.assertFalse(pm3.check_token(tok))
         finally:
             os.path.exists(path) and os.unlink(path)
@@ -302,18 +279,6 @@ class TestRequirePairing(unittest.TestCase):
             self.assertTrue(r)
             # the dial/chatter lines must not have burned guesses
             self.assertEqual(pm._fails.get(FakeChannel.peer, [0])[0], 0)
-        finally:
-            os.path.exists(path) and os.unlink(path)
-
-    def test_window_closed_refuses(self):
-        # The window only gates NEW (code-based) pairing, so the refusal is
-        # now reactive: it fires only once a real (non-token) line arrives.
-        pm, path = make_pm("ABC234", ttl_secs=60)
-        try:
-            pm.born = time.monotonic() - 61
-            r, ch = run_pairing(pm, feed=b"NOTATOKEN\r")
-            self.assertFalse(r)
-            self.assertIn(b"PAIRING CLOSED", ch.out())
         finally:
             os.path.exists(path) and os.unlink(path)
 
@@ -390,7 +355,7 @@ from bridge import PairingManager
 
 def test_v2_store_roundtrip_and_perms(tmp_path):
     store = tmp_path / "paired.json"
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(store))
+    pm = PairingManager("ABC123", store_path=str(store))
     pm.devices.append({"token_sha256": "a" * 64,
                        "first_ip": "10.0.0.5", "paired_at": 1000})
     pm._save()
@@ -403,13 +368,13 @@ def test_v2_store_roundtrip_and_perms(tmp_path):
 def test_legacy_v1_ip_list_is_ignored(tmp_path):
     store = tmp_path / "paired.json"
     store.write_text(json.dumps(["10.0.1.117", "127.0.0.1"]))  # old shape
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(store))
+    pm = PairingManager("ABC123", store_path=str(store))
     assert pm.devices == []  # legacy IPs never trusted
 
 
 def test_clear_paired_counts_and_empties(tmp_path):
     store = tmp_path / "paired.json"
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(store))
+    pm = PairingManager("ABC123", store_path=str(store))
     pm.devices = [{"token_sha256": "b" * 64, "first_ip": "x", "paired_at": 1}]
     pm._save()
     assert pm.clear_paired() == 1
@@ -421,7 +386,7 @@ from bridge import token_hash
 
 
 def test_issue_then_check_token(tmp_path):
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     tok = pm.issue_token("10.0.0.9")
     assert len(tok) == 32
     assert pm.check_token(tok) is True
@@ -432,7 +397,7 @@ def test_issue_then_check_token(tmp_path):
 
 
 def test_check_code_does_not_store_ip(tmp_path):
-    pm = PairingManager("ABC123", ttl_secs=0, store_path=str(tmp_path / "p.json"))
+    pm = PairingManager("ABC123", store_path=str(tmp_path / "p.json"))
     assert pm.check("10.0.0.9", "ABC123") is True
     assert pm.devices == []  # code success alone stores nothing; issue does
 
