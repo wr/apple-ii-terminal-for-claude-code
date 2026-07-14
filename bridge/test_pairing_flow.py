@@ -106,6 +106,17 @@ def test_per_ip_code_shown_only_when_a_device_needs_it(tmp_path):
     assert require_pairing(term2, _args(), pm) == "code"
 
 
+def test_code_is_consumed_after_pairing(tmp_path):
+    # A generated code is single-use: once it pairs one device, the same code
+    # can't enroll another from that IP - the next one is fresh.
+    pm = PairingManager(store_path=str(tmp_path / "p.json"))  # per-IP
+    code = pm.code_for("10.0.0.7")
+    term = _FakeTerm(["", code])
+    term.ch.peer = "10.0.0.7"
+    assert require_pairing(term, _args(), pm) == "code"
+    assert pm.code_for("10.0.0.7") != code   # consumed; a new code was minted
+
+
 def test_looks_like_token_shape():
     assert _looks_like_token(gen_token()) is True
     assert _looks_like_token("hello") is False

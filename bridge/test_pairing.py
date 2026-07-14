@@ -200,6 +200,26 @@ class TestManager(unittest.TestCase):
         finally:
             os.path.exists(path) and os.unlink(path)
 
+    def test_code_is_single_use(self):
+        pm, path = make_pm(pinned=False)        # per-IP
+        try:
+            c1 = pm.code_for("10.0.0.1")
+            self.assertTrue(pm.check("10.0.0.1", c1))
+            pm.consume_code("10.0.0.1")          # a token was just minted
+            self.assertFalse(pm.check("10.0.0.1", c1))     # used code is dead
+            self.assertNotEqual(pm.code_for("10.0.0.1"), c1)  # next one is fresh
+        finally:
+            os.path.exists(path) and os.unlink(path)
+
+    def test_pinned_code_survives_consume(self):
+        pm, path = make_pm("ABC234")            # pinned = explicitly shared
+        try:
+            self.assertTrue(pm.check("10.0.0.1", "ABC234"))
+            pm.consume_code("10.0.0.1")
+            self.assertTrue(pm.check("10.0.0.2", "ABC234"))  # still works for all
+        finally:
+            os.path.exists(path) and os.unlink(path)
+
     def test_revocation_and_persistence(self):
         # Trust now lives in an issued token's hash, not a peer IP - exercise
         # the same persist/reload/revoke lifecycle through issue_token/
