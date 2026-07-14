@@ -116,6 +116,60 @@ def test_codebackend_cancel_uses_group_kill() -> None:
     print("PASS: CodeBackend.cancel kills the process group")
 
 
+def test_kill_group_when_leader_exits_but_child_ignores_term() -> None:
+    child_src = (
+        "import signal,time;"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        "print('ready', flush=True);"
+        "time.sleep(999)"
+    )
+    parent_src = (
+        "import subprocess,sys,time;"
+        "c=subprocess.Popen([sys.executable,'-c',sys.argv[1]]);"
+        "print(c.pid, flush=True);"
+        "time.sleep(999)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", parent_src, child_src],
+        stdout=subprocess.PIPE, text=True, start_new_session=True,
+    )
+    assert proc.stdout is not None
+    child_pid = int(proc.stdout.readline())
+    time.sleep(0.3)
+    backends._kill_process_group(proc, grace=0.2)
+    assert _wait_dead(proc.pid), "group leader survived"
+    assert _wait_dead(child_pid), "SIGTERM-ignoring child survived leader exit"
+
+
+def test_codebackend_cancel_during_process_publication(monkeypatch) -> None:
+    real_popen = backends.subprocess.Popen
+    spawned = threading.Event()
+    publish = threading.Event()
+    holder = {}
+
+    def delayed_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        holder["proc"] = proc
+        spawned.set()
+        assert publish.wait(2)
+        return proc
+
+    be = backends.CodeBackend(cols=80, claude_bin=sys.executable)
+    be._build_cmd = lambda _text: [
+        sys.executable, "-c", "import time; time.sleep(999)"
+    ]
+    monkeypatch.setattr(backends.subprocess, "Popen", delayed_popen)
+    worker = threading.Thread(target=lambda: list(be.stream("hello")), daemon=True)
+    worker.start()
+    assert spawned.wait(2)
+    be.cancel()
+    publish.set()
+    worker.join(3)
+    proc = holder["proc"]
+    assert not worker.is_alive(), "stream stayed blocked after startup cancel"
+    assert _wait_dead(proc.pid), "process published after cancel survived"
+
+
 # --------------------------------------------------------------------------- #
 # ChatBackend.cancel: abort the stream even mid-stall
 # --------------------------------------------------------------------------- #
@@ -123,6 +177,8 @@ def test_chatbackend_cancel_closes_stream() -> None:
     # Build the backend without touching the anthropic SDK / a live client.
     be = backends.ChatBackend.__new__(backends.ChatBackend)
     be._cancel = False
+    be._state_lock = threading.Lock()
+    be._cancel_event = threading.Event()
     closed = []
 
     class FakeStream:
@@ -138,6 +194,57 @@ def test_chatbackend_cancel_closes_stream() -> None:
     be._stream = None
     be.cancel()
     print("PASS: ChatBackend.cancel closes the stream (and no-ops when idle)")
+
+
+def test_chatbackend_cancel_during_stream_publication() -> None:
+    entered = threading.Event()
+    publish = threading.Event()
+    closed = threading.Event()
+
+    class BlockingText:
+        def __iter__(self):
+            closed.wait(3)
+            return iter(())
+
+    class FakeStream:
+        text_stream = BlockingText()
+        def close(self):
+            closed.set()
+        def get_final_message(self):
+            raise AssertionError("cancelled stream must not request a final message")
+
+    class StreamContext:
+        def __enter__(self):
+            entered.set()
+            assert publish.wait(2)
+            return FakeStream()
+        def __exit__(self, *_args):
+            return False
+
+    class Messages:
+        def stream(self, **_kwargs):
+            return StreamContext()
+
+    be = backends.ChatBackend.__new__(backends.ChatBackend)
+    be._client = type("Client", (), {"messages": Messages()})()
+    be._model = "test"
+    be._effort = "low"
+    be._max_tokens = 32
+    be._system = "test"
+    be._messages = []
+    be._cancel = False
+    be._stream = None
+    be._state_lock = threading.Lock()
+    be._cancel_event = threading.Event()
+
+    worker = threading.Thread(target=lambda: list(be.stream("hello")), daemon=True)
+    worker.start()
+    assert entered.wait(2)
+    be.cancel()
+    publish.set()
+    worker.join(3)
+    assert closed.is_set(), "stream published after cancel was not closed"
+    assert not worker.is_alive(), "chat stream stayed blocked after startup cancel"
 
 
 # --------------------------------------------------------------------------- #

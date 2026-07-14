@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from typing import Iterator
 
 _version_cache: dict[str, str] = {}
@@ -166,6 +167,8 @@ class ChatBackend(Backend):
         self._messages: list[dict] = []
         self._cancel = False
         self._stream = None  # the in-flight anthropic stream, if any
+        self._state_lock = threading.Lock()
+        self._cancel_event = threading.Event()
 
     def reset(self) -> None:
         self._messages = []
@@ -176,17 +179,21 @@ class ChatBackend(Backend):
         that's STALLED between chunks, so a wedged model doesn't hang the
         session waiting for a byte that never comes."""
         self._cancel = True
-        s = self._stream
-        if s is not None:
+        self._cancel_event.set()
+        with self._state_lock:
+            stream = self._stream
+        if stream is not None:
             try:
-                s.close()  # tears down the HTTP response from under the reader
+                stream.close()  # tears down the HTTP response from under the reader
             except Exception:
                 pass
 
     def stream(self, user_text: str) -> Iterator[str]:
         self._cancel = False
+        self._cancel_event.clear()
         self._messages.append({"role": "user", "content": user_text})
         reply_parts: list[str] = []
+        stream = None
         try:
             with self._client.messages.stream(
                 model=self._model,
@@ -195,10 +202,14 @@ class ChatBackend(Backend):
                 output_config={"effort": self._effort},
                 messages=self._messages,
             ) as stream:
-                self._stream = stream
+                with self._state_lock:
+                    self._stream = stream
+                    cancelled_during_start = self._cancel_event.is_set()
+                if cancelled_during_start:
+                    stream.close()
                 try:
                     for text in stream.text_stream:
-                        if self._cancel:
+                        if self._cancel_event.is_set():
                             break
                         reply_parts.append(text)
                         yield text
@@ -206,9 +217,9 @@ class ChatBackend(Backend):
                     # cancel() closes the stream from another thread, which
                     # surfaces here as a read error - treat it as a clean stop,
                     # but let a genuine streaming fault propagate.
-                    if not self._cancel:
+                    if not self._cancel_event.is_set():
                         raise
-            if self._cancel:
+            if self._cancel_event.is_set():
                 # keep the partial turn so the transcript stays coherent
                 self._messages.append({"role": "assistant",
                                        "content": "".join(reply_parts) or "(interrupted)"})
@@ -221,35 +232,44 @@ class ChatBackend(Backend):
             print(f"[bridge] chat backend error: {exc}", file=sys.stderr, flush=True)
             yield "\n[bridge error: chat request failed]"
         finally:
-            self._stream = None
+            with self._state_lock:
+                if self._stream is stream:
+                    self._stream = None
+
+
+def _process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 def _kill_process_group(proc: subprocess.Popen, grace: float = 2.0) -> None:
-    """Take down a Popen's whole process group: SIGTERM it, wait `grace`
-    seconds, then SIGKILL anything still standing. Assumes the process was
-    started with start_new_session=True so its pgid == pid, which is how one
-    signal reaches `claude -p` AND the children it spawned (MCP servers, tools)
-    instead of orphaning them. No-ops if the process is already gone."""
-    if proc.poll() is not None:
-        return
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, PermissionError, OSError):
-        return  # already reaped, or not a group we can signal
+    pgid = proc.pid  # start_new_session=True makes the leader PID the PGID
 
-    def _sig(sig) -> None:
+    def _signal_group(sig) -> None:
         try:
             os.killpg(pgid, sig)
         except (ProcessLookupError, PermissionError, OSError):
             pass
 
-    _sig(signal.SIGTERM)
-    try:
-        proc.wait(timeout=grace)
-        return  # went quietly
-    except subprocess.TimeoutExpired:
-        pass
-    _sig(signal.SIGKILL)  # ignored SIGTERM; SIGKILL can't be caught
+    def _wait_group(timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            proc.poll()  # reap an exited leader; surviving children keep the PGID live
+            if not _process_group_exists(pgid):
+                return True
+            time.sleep(0.02)
+        proc.poll()
+        return not _process_group_exists(pgid)
+
+    _signal_group(signal.SIGTERM)
+    if not _wait_group(grace):
+        _signal_group(signal.SIGKILL)
+        _wait_group(grace)
     try:
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
@@ -278,6 +298,8 @@ class CodeBackend(Backend):
         self._session_id: str | None = None
         self._proc: subprocess.Popen | None = None  # the in-flight turn, if any
         self._cancelled = False
+        self._state_lock = threading.Lock()
+        self._cancel_event = threading.Event()
         # Seed from the last run so the header shows a real model at boot, before
         # the first reply's init event arrives.
         self._last_model = read_cached_model()
@@ -319,10 +341,11 @@ class CodeBackend(Backend):
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, bufsize=1, cwd=self._cwd,
+                start_new_session=True,
             )
         except Exception:
             return
-        killer = threading.Timer(timeout, proc.kill)
+        killer = threading.Timer(timeout, _kill_process_group, args=(proc, 0.5))
         killer.start()
         try:
             assert proc.stdout is not None
@@ -336,11 +359,7 @@ class CodeBackend(Backend):
                     break
         finally:
             killer.cancel()
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except Exception:
-                proc.kill()
+            _kill_process_group(proc, grace=2.0)
 
     @staticmethod
     def _real_model(mid) -> str | None:
@@ -395,7 +414,9 @@ class CodeBackend(Backend):
         pipe EOFs, stream() winds down, and the exit-code complaint is
         suppressed because we're the ones who shot it."""
         self._cancelled = True
-        proc = self._proc
+        self._cancel_event.set()
+        with self._state_lock:
+            proc = self._proc
         if proc is not None:
             _kill_process_group(proc)
 
@@ -403,6 +424,7 @@ class CodeBackend(Backend):
         self._last_duration_ms = None
         self._last_output_tokens = None
         self._cancelled = False
+        self._cancel_event.clear()
         try:
             proc = subprocess.Popen(
                 self._build_cmd(user_text),
@@ -421,7 +443,11 @@ class CodeBackend(Backend):
             yield "\n[bridge error: claude CLI not found on the host]"
             return
 
-        self._proc = proc
+        with self._state_lock:
+            self._proc = proc
+            cancelled_during_start = self._cancel_event.is_set()
+        if cancelled_during_start:
+            _kill_process_group(proc)
         assert proc.stdout is not None
         # Drain stderr on a thread for the whole turn. `claude -p` can emit more
         # than a pipe buffer holds; if we only read stderr at the end, a full
@@ -440,26 +466,30 @@ class CodeBackend(Backend):
         err_thread = threading.Thread(target=_drain_err, daemon=True)
         err_thread.start()
 
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            yield from self._render_event(event)
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                yield from self._render_event(event)
 
-        proc.wait()
-        err_thread.join(timeout=1.0)
-        self._proc = None
-        if self._cancelled:
-            return  # we killed it; a nonzero exit code is expected, not news
-        if proc.returncode not in (0, None):
-            err = "".join(err_parts).strip()
-            if err:
-                print(f"[bridge] claude stderr: {err}", file=sys.stderr, flush=True)
-            yield f"\n[claude exited {proc.returncode}]"
+            proc.wait()
+            err_thread.join(timeout=1.0)
+            if self._cancelled:
+                return  # we killed it; a nonzero exit code is expected, not news
+            if proc.returncode not in (0, None):
+                err = "".join(err_parts).strip()
+                if err:
+                    print(f"[bridge] claude stderr: {err}", file=sys.stderr, flush=True)
+                yield f"\n[claude exited {proc.returncode}]"
+        finally:
+            with self._state_lock:
+                if self._proc is proc:
+                    self._proc = None
 
     def _render_event(self, event: dict) -> Iterator[str]:
         etype = event.get("type")
