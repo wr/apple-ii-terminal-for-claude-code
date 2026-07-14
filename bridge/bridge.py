@@ -133,15 +133,13 @@ def print_banner(args, transport, pm=None) -> None:
     else:
         row(transport.describe())
     if pm:
-        row()
+        # Per-IP codes have nothing to show at boot - each prints on the
+        # connection line when its device dials in. A pinned code is shared,
+        # so show it here.
         if pm.pinned:
+            row()
             row(f"pairing code: {pm.pinned}",
                 f"{GRAY}pairing code: {OFF}{BOLD}{CORAL}{pm.pinned}{OFF}")
-        else:
-            row("a pairing code is shown here",
-                f"{GRAY}a pairing code is shown here{OFF}")
-            row("when a new device connects",
-                f"{GRAY}when a new device connects{OFF}")
     elif args.telnet:  # --no-pair
         row()
         row("PAIRING OFF - anyone who can reach",
