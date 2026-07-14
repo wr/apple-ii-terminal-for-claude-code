@@ -409,7 +409,12 @@ class CodeBackend(Backend):
         if not ms:
             return None
         secs = round(ms / 1000)
-        t = f"{secs // 60}m {secs % 60}s" if secs >= 60 else f"{secs}s"
+        if secs >= 3600:  # match the client's live timer: drop seconds at hours
+            t = f"{secs // 3600}h {(secs % 3600) // 60}m"
+        elif secs >= 60:
+            t = f"{secs // 60}m {secs % 60}s"
+        else:
+            t = f"{secs}s"
         foot = f"Worked for {t}"
         tok = getattr(self, "_last_output_tokens", None)
         if tok:

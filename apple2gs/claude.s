@@ -1089,16 +1089,18 @@ bell_maybe:
         .i8
         lda     quitflag        ; session's over: leave quietly
         bne     bm_x
-        lda     sp_huns
+        lda     sp_h            ; >=1 minute (any h/m digit) is well past 15s
+        ora     sp_m1
+        ora     sp_m10
         bne     bm_ring
-        lda     sp_tens
+        lda     sp_s10
         cmp     #2
-        bcs     bm_ring
+        bcs     bm_ring         ; >=20s
         cmp     #1
-        bne     bm_x
-        lda     sp_ones
+        bne     bm_x            ; <10s
+        lda     sp_s1
         cmp     #5
-        bcc     bm_x
+        bcc     bm_x            ; 10-14s
 bm_ring:
         jsr     snd_bell
 bm_lp:  jsr     rb_poll
@@ -1458,9 +1460,11 @@ spinner:
         stz     frame
         stz     havefirst
         stz     sp_vblsub
-        stz     sp_ones
-        stz     sp_tens
-        stz     sp_huns
+        stz     sp_s1
+        stz     sp_s10
+        stz     sp_m1
+        stz     sp_m10
+        stz     sp_h
         inc     spinword        ; next word for this reply
         lda     spinword
         cmp     #SPIN_COUNT
@@ -1539,7 +1543,7 @@ sp_draw:
         sep     #$20
         .a8
         jsr     draw_str        ; " Word..."
-        ; elapsed timer in gray:  (Ns)
+        ; elapsed timer in gray, smart units:  (38s) (12m 18s) (1h 08m)
         lda     #1
         sta     txtcolor
         lda     #' '
@@ -1547,8 +1551,6 @@ sp_draw:
         lda     #'('
         jsr     putchar
         jsr     draw_secs
-        lda     #'s'
-        jsr     putchar
         lda     #')'
         jsr     putchar
         ; pad to col 30 with spaces to erase a longer previous render
@@ -1614,17 +1616,27 @@ sp_pc_x:
 tick_second:
         .a8
         .i8
-        inc     sp_ones
-        lda     sp_ones
+        inc     sp_s1
+        lda     sp_s1
         cmp     #10
         bcc     ts_word
-        stz     sp_ones
-        inc     sp_tens
-        lda     sp_tens
+        stz     sp_s1
+        inc     sp_s10
+        lda     sp_s10
+        cmp     #6              ; 60 seconds -> carry into minutes
+        bcc     ts_word
+        stz     sp_s10
+        inc     sp_m1
+        lda     sp_m1
         cmp     #10
         bcc     ts_word
-        stz     sp_tens
-        inc     sp_huns
+        stz     sp_m1
+        inc     sp_m10
+        lda     sp_m10
+        cmp     #6              ; 60 minutes -> carry into hours
+        bcc     ts_word
+        stz     sp_m10
+        inc     sp_h            ; saturates in practice; never displayed past 9h
 ts_word:
         dec     sp_wordcd
         bne     ts_done
@@ -1639,30 +1651,77 @@ ts_cd:
 ts_done:
         rts
 
-; draw_secs - print the elapsed seconds (sp_huns/tens/ones) with no leading zeros
+; draw_secs - elapsed time in gray with smart units and no leading zeros:
+;   under a minute -> "38s"; under an hour -> "12m 18s"; else -> "1h 08m".
+;   Prints its own unit letters; the caller wraps the whole thing in ( ).
 draw_secs:
         .a8
         .i8
-        lda     sp_huns
-        beq     ds_tens
+        lda     sp_h
+        bne     ds_hours
+        lda     sp_m1
+        ora     sp_m10
+        bne     ds_mins
+        ; seconds only: "Ns"
+        lda     sp_s10
+        beq     ds_s_ones
         clc
         adc     #'0'
         jsr     putchar
-        lda     sp_tens         ; huns shown -> always show tens
+ds_s_ones:
+        lda     sp_s1
         clc
         adc     #'0'
         jsr     putchar
-        bra     ds_ones
-ds_tens:
-        lda     sp_tens
-        beq     ds_ones
+        lda     #'s'
+        jsr     putchar
+        rts
+ds_mins:
+        ; "Mm SSs" - minutes without leading zero, seconds always two-digit
+        lda     sp_m10
+        beq     ds_m_ones
         clc
         adc     #'0'
         jsr     putchar
-ds_ones:
-        lda     sp_ones
+ds_m_ones:
+        lda     sp_m1
         clc
         adc     #'0'
+        jsr     putchar
+        lda     #'m'
+        jsr     putchar
+        lda     #' '
+        jsr     putchar
+        lda     sp_s10
+        clc
+        adc     #'0'
+        jsr     putchar
+        lda     sp_s1
+        clc
+        adc     #'0'
+        jsr     putchar
+        lda     #'s'
+        jsr     putchar
+        rts
+ds_hours:
+        ; "Hh MMm" - hours, minutes two-digit (seconds dropped at this scale).
+        ; A still holds sp_h from the test above.
+        clc
+        adc     #'0'
+        jsr     putchar
+        lda     #'h'
+        jsr     putchar
+        lda     #' '
+        jsr     putchar
+        lda     sp_m10
+        clc
+        adc     #'0'
+        jsr     putchar
+        lda     sp_m1
+        clc
+        adc     #'0'
+        jsr     putchar
+        lda     #'m'
         jsr     putchar
         rts
 
@@ -3062,9 +3121,15 @@ str_prompt: .byte "> ",0
 linebuf:    .res 128
 sp_vblsub:  .res 1          ; vblanks counted within the current second
 sp_wordcd:  .res 1          ; seconds until the thinking word rotates
-sp_ones:    .res 1          ; elapsed-seconds decimal digits
-sp_tens:    .res 1
-sp_huns:    .res 1
+; elapsed-time counters, each a decimal digit that carries into the next
+; (seconds ones/tens -> minutes ones/tens -> hours). Carrying avoids any
+; divide and, unlike the old flat "hundreds of seconds" digit, never
+; overflows a digit past 9 into an ASCII letter on a long (>16min) think.
+sp_s1:      .res 1          ; seconds ones  (0-9)
+sp_s10:     .res 1          ; seconds tens  (0-5)
+sp_m1:      .res 1          ; minutes ones  (0-9)
+sp_m10:     .res 1          ; minutes tens  (0-5)
+sp_h:       .res 1          ; hours         (saturates; a 10h wait won't happen)
 b_head:     .res 1          ; ring index of the current (being-written) line
 b_count:    .res 1          ; number of lines recorded (1..BUF_LINES)
 b_col:      .res 1          ; column within the current line (0..79)
