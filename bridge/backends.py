@@ -124,6 +124,19 @@ TERMINAL_SYSTEM = (
 class Backend:
     name = "backend"
 
+    # Optional (kind, detail) callback the session sets to watch a turn's
+    # progress - tool calls, thinking - on the host console. None = no observer.
+    # Kept distinct from stream(): activity is for the operator, not the client.
+    on_activity = None
+
+    def _emit_activity(self, kind: str, detail: str = "") -> None:
+        cb = self.on_activity
+        if cb is not None:
+            try:
+                cb(kind, detail)
+            except Exception:  # a broken observer must never derail a turn
+                pass
+
     def stream(self, user_text: str) -> Iterator[str]:
         raise NotImplementedError
 
@@ -520,14 +533,20 @@ class CodeBackend(Backend):
                 btype = block.get("type")
                 if btype == "text":
                     yield block.get("text", "")
-                elif btype == "tool_use" and self._show_tools:
+                elif btype == "tool_use":
                     name = block.get("name", "tool")
-                    yield f"\n[{name}] "
                     inp = block.get("input", {})
                     hint = inp.get("command") or inp.get("file_path") or inp.get("path")
-                    if hint:
-                        yield str(hint)[: self._cols]
-                    yield "\n"
+                    # Console-observable regardless of _show_tools: the operator
+                    # wants to see what a long think is doing even when the client
+                    # keeps its spinner up (app mode suppresses the wire marker).
+                    self._emit_activity(
+                        "tool", f"{name} {str(hint)}".strip() if hint else name)
+                    if self._show_tools:
+                        yield f"\n[{name}] "
+                        if hint:
+                            yield str(hint)[: self._cols]
+                        yield "\n"
             return
 
         if etype == "result":
@@ -537,6 +556,9 @@ class CodeBackend(Backend):
             )
             usage = event.get("usage") or {}
             self._last_output_tokens = usage.get("output_tokens")
+            foot = self.footer()
+            if foot:
+                self._emit_activity("result", foot.lower())
             if self._last_model:  # persist for the next run's boot header
                 write_cached_model(self._last_model)
             return

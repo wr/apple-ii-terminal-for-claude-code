@@ -96,6 +96,24 @@ def show_reply(peer, secs: float, nlines: int, mode: str) -> None:
           f"{CORAL}< {mode} reply sent · {secs:.1f}s · {nlines} lines{OFF}")
 
 
+def show_activity(peer, kind: str, detail: str) -> None:
+    """Live turn progress on the host console: tool calls as a code-mode turn
+    runs, then its result timing. Console-only (never sent to the Apple II) -
+    this is the "what is it doing?" signal during a long silent think, where the
+    client just shows its spinner. Indented under the user's line like a log."""
+    body = detail or kind
+    _line(peer or "client",
+          f"{GRAY}    {body}{OFF}" if kind == "tool"
+          else f"{GRAY}    ({body}){OFF}")
+
+
+def _attach_activity(backend, peer) -> None:
+    """Point a backend's activity hook at this peer's console log. Re-called
+    after a /mode swap so the replacement backend is observed too."""
+    if backend is not None:
+        backend.on_activity = lambda kind, detail: show_activity(peer, kind, detail)
+
+
 def _lan_ip():
     """This host's LAN address - the IP the WiFi modem must dial."""
     import socket
@@ -295,6 +313,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
                 term.write(EOT)
                 if isinstance(keep, tuple):
                     backend, mode = keep
+                    _attach_activity(backend, peer)
                 continue
         if backend is None:
             term.write_line("[no backend]")
@@ -856,6 +875,7 @@ def _run_session(term: Terminal, args, pm, guard) -> None:
         backend = make_backend(mode, cols, args)
     except Exception as exc:  # e.g. missing API key for chat mode
         backend_err = str(exc)
+    _attach_activity(backend, getattr(term.ch, "peer", None))
 
     if args.app:
         return run_app_session(term, args, backend, backend_err, mode, pair_via)
@@ -890,6 +910,7 @@ def _run_session(term: Terminal, args, pm, guard) -> None:
             if keep != "pass":  # "pass" = forward to claude like a prompt
                 if isinstance(keep, tuple):  # (new_backend, new_mode)
                     backend, mode = keep
+                    _attach_activity(backend, getattr(term.ch, "peer", None))
                 continue
 
         if backend is None:
