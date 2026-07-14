@@ -9,6 +9,20 @@ artifacts carry a SHA-256 so you can verify the download.
 
 ## [Unreleased]
 
+### Added
+- **Distinct modem dial failures.** Both native clients now classify a modem
+  result line into a specific verdict — CONNECT, ERROR, BUSY, NO CARRIER, or
+  NO ANSWER — and show an actionable message for each instead of one generic
+  "dial failed". ERROR points at the entry-0 setup (`AT&Z0=host:port`);
+  NO CARRIER/NO ANSWER point at the bridge and 9600 8N1. Silence still means
+  "proceed" (the emulator / already-online path), so KEGS and direct serial
+  are unaffected.
+
+### Changed
+- **GS "Cogitating" timer shows hours/minutes/seconds.** The live think timer
+  no longer overflows past 999s into garbled ASCII (e.g. `Y38s`); it now reads
+  `38s`, `12m 18s`, `1h 08m`. The after-reply footer matches.
+
 ## [1.1.0] - 2026-07-13
 
 Device pairing that survives reboots, plus real turn cancellation and CI.

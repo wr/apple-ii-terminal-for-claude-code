@@ -63,6 +63,15 @@ CMD_QUIT   = $03       ; in-band: bridge says session over -> back to the menu
 CMD_TOKEN  = $05       ; in-band: bridge issues a device token; we store it to disk
 CMD_HEADER = $0E       ; in-band: header frame follows (title CR subtitle CR)
 
+; ---- dial verdicts (dialres): the classifier splits a modem result line into
+;   a specific outcome so each failure gets its own actionable message. 0 is
+;   silence (no line seen) -> proceed, the emulator/already-online path.
+DR_CONN    = 1         ; CONNECT
+DR_ERR     = 2         ; ERROR (bad AT command / missing phonebook entry 0)
+DR_BUSY    = 3         ; BUSY  (the bridge already has a client)
+DR_NOCAR   = 4         ; NO CARRIER (and other NO x: dialed, no link)
+DR_NOANS   = 5         ; NO ANSWER  (rang, nothing picked up)
+
 ; ---- token sector (device pairing): RWTS a reserved sector on the boot disk.
 ;   RWTS is 8-bit DOS code (never touches M/X or the e-bit), so the token
 ;   helpers run in native 8-bit mode (sep #$30). Entry $BD00, the IOB/DCT
@@ -348,10 +357,10 @@ ac_rx:  jsr     havebyte        ; classify any modem chatter from this beat
         bra     ac_rx           ; leave evidence on the screen
 ac_ck:  plx
         lda     dialres
-        cmp     #1              ; CONNECT -> settled; let the theater end
+        cmp     #DR_CONN         ; CONNECT -> settled; let the theater end
         beq     ac_hold
-        cmp     #2              ; ERROR/BUSY/NO x -> say so, back to menu
-        beq     ac_fail
+        cmp     #DR_ERR          ; >=DR_ERR: any classified failure -> say which
+        bcs     ac_fail
         dex
         bne     ac_lp
         ; 3s of silence = no modem in the path (KEGS) or already online:
@@ -376,7 +385,25 @@ ac_fail:
         jsr     music_stop
         lda     #21
         jsr     clear_rowA
-        TEXT    str_dfail, 21, 21, 2
+        ; pick the actionable line for this verdict (dialres DR_ERR..DR_NOANS)
+        lda     dialres
+        sec
+        sbc     #DR_ERR
+        asl     a               ; *2 (2-byte pointers)
+        tax
+        rep     #$20
+        .a16
+        lda     dfail_ptrs,x
+        sta     strptr
+        lda     #2
+        sta     curcol
+        lda     #21
+        sta     currow
+        sep     #$20
+        .a8
+        lda     #2              ; coral
+        sta     txtcolor
+        jsr     draw_str
         ldy     #200            ; leave it up ~3.3s, then back to the menu
 af_w:   jsr     vbl_edge
         dey
@@ -1209,48 +1236,86 @@ dial_echo:
         sta     dcol
 @x:     rts
 
-; dial_byte - classify modem response lines during the dial window, one
-; rx byte at a time. First letter E(RROR)/B(USY) or "NO.." = fail,
-; "CO.." (CONNECT) = success; "OK"/"RING"/anything else is ignored.
-; Sets dialres: 1 = connect, 2 = fail. Silence leaves it 0.
+; dial_byte - classify a modem result line during the dial window, one rx
+; byte at a time, into a SPECIFIC verdict. mdm_c1 holds the line phase:
+;   0   start of line (expect the first letter)
+;   'C' saw C, expect O            -> CONNECT
+;   'N' saw N, expect O
+;   'M' saw "NO", scan (skip spaces) for the keyword letter C(ARRIER)/A(NSWER)
+;   $FF line already classified -> drain to CR
+; Sets dialres to a DR_* verdict; silence (no line) leaves it 0. Bounded: a
+; handful of compares per byte, so it stays cheap inside the rx loop.
 dial_byte:
         .a8
         .i8
         and     #$7F
         cmp     #$0D
-        beq     db_nl
+        beq     db_nl           ; CR: line boundary -> reset phase
         cmp     #$20
-        bcc     db_x            ; other control bytes: ignore
+        bcc     db_x            ; other control byte: ignore
         ldx     mdm_c1
-        bne     db_c2
-        sta     mdm_c1          ; first printable of the line
-        cmp     #'E'
-        beq     db_fail
-        cmp     #'B'
-        beq     db_fail
-        rts
-db_c2:  cpx     #$FF            ; line already classified/consumed
-        beq     db_x
-        pha
-        lda     #$FF            ; consume the rest of the line either way
-        sta     mdm_c1
-        pla
-        cmp     #'O'            ; second char must be O for CONNECT / NO x
-        bne     db_x
+        cpx     #$FF
+        beq     db_x            ; line done: drain the rest
         cpx     #'C'
-        beq     db_conn
+        beq     db_pC
         cpx     #'N'
-        beq     db_fail
+        beq     db_pN
+        cpx     #'M'
+        beq     db_pM
+        ; phase 0: the line's first letter
+        cmp     #' '
+        beq     db_x            ; skip a leading space, stay in phase 0
+        cmp     #'E'
+        beq     db_err
+        cmp     #'B'
+        beq     db_busy
+        cmp     #'C'
+        beq     db_setC
+        cmp     #'N'
+        beq     db_setN
+        bra     db_ignore       ; OK / RING / dial echo / other -> not a verdict
+db_pC:  cmp     #'O'            ; "CO" -> CONNECT
+        bne     db_ignore
+        lda     #DR_CONN
+        bra     db_set
+db_pN:  cmp     #'O'            ; "NO" -> scan for the keyword
+        bne     db_ignore
+        lda     #'M'
+        sta     mdm_c1
         rts
-db_conn:
-        lda     #1
-        sta     dialres
+db_pM:  cmp     #' '            ; skip the space(s) after "NO"
+        beq     db_x            ; stay in 'M'
+        cmp     #'C'
+        beq     db_nocar
+        cmp     #'A'
+        beq     db_noans
+        lda     #DR_NOCAR       ; NO DIALTONE / other NO x -> carrier-class fail
+        bra     db_set
+db_setC:
+        lda     #'C'
+        sta     mdm_c1
         rts
-db_fail:
-        lda     #2
-        sta     dialres
-db_nl:  stz     mdm_c1
+db_setN:
+        lda     #'N'
+        sta     mdm_c1
+        rts
+db_err: lda     #DR_ERR
+        bra     db_set
+db_busy:
+        lda     #DR_BUSY
+        bra     db_set
+db_nocar:
+        lda     #DR_NOCAR
+        bra     db_set
+db_noans:
+        lda     #DR_NOANS
+db_set: sta     dialres         ; verdict recorded; drain the rest of the line
+db_ignore:
+        lda     #$FF
+        sta     mdm_c1
 db_x:   rts
+db_nl:  stz     mdm_c1
+        rts
 
 dial_str:
         .byte   "ATDS=0",0
@@ -3084,7 +3149,17 @@ str_welcome:.byte "Welcome to Terminal for Claude Code",0
 str_ver:    .byte "for Apple IIgs - v1.1.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
-str_dfail:  .byte "Dial failed - try the modem console",0
+; per-verdict dial-failure lines, indexed DR_ERR..DR_NOANS by dfail_ptrs.
+; Each is actionable and <=38 chars so it also fits the 8-bit 40-col fallback.
+str_derr:   .byte "ERROR - set entry 0: AT&Z0=host:port",0
+str_dbusy:  .byte "BUSY - bridge has another client",0
+str_dnocar: .byte "NO CARRIER - is the bridge running?",0
+str_dnoans: .byte "NO ANSWER - check host/port, 9600 8N1",0
+dfail_ptrs:
+        .addr   str_derr        ; DR_ERR
+        .addr   str_dbusy       ; DR_BUSY
+        .addr   str_dnocar      ; DR_NOCAR
+        .addr   str_dnoans      ; DR_NOANS
 str_quit:   .byte "/quit"                 ; matched locally in the main loop
 str_exit:   .byte "/exit"                 ; same length, same treatment
 str_nocarr: .byte "* connection lost - back to menu",0
@@ -3145,7 +3220,7 @@ mus_on:     .res 1          ; nonzero while a sound plays
 mus_rel:    .res 1          ; 1 = this sound ends with a fading tail
 mus_relv:   .res 1          ; release ramp: current volume (0 = not releasing)
 wake_done:  .res 1          ; the wake gesture already greeted this boot
-dialres:    .res 1          ; dial window: 0 silence, 1 CONNECT, 2 failure
+dialres:    .res 1          ; dial window verdict: 0 silence, else a DR_* code
 dcd_active: .res 1          ; nonzero if DCD was asserted at session start
 dcd_trust:  .res 1          ; DCD has read "no carrier" once: the pin is live
 muteflag:   .res 1          ; Ctrl-C during recv_reply: drain without drawing

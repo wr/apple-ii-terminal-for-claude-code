@@ -63,6 +63,15 @@ CMD_QUIT   = $03
 CMD_TOKEN  = $05        ; app mode: bridge issues a device token; we store it
 CMD_HEADER = $0E
 
+; ---- dial verdicts (dialres): the classifier splits a modem result line into
+;   a specific outcome so each failure gets its own actionable message. 0 is
+;   silence (no line seen) -> proceed, the emulator/already-online path.
+DR_CONN    = 1          ; CONNECT
+DR_ERR     = 2          ; ERROR (bad AT command / missing phonebook entry 0)
+DR_BUSY    = 3          ; BUSY  (the bridge already has a client)
+DR_NOCAR   = 4          ; NO CARRIER (and other NO x: dialed, no link)
+DR_NOANS   = 5          ; NO ANSWER  (rang, nothing picked up)
+
 ; ---- layout (matches the GS client's shape)
 TOPROW  = 6             ; transcript window
 BTMROW  = 20
@@ -827,10 +836,10 @@ act_connect:
 @ck:    pla
         tax
         lda     dialres
-        cmp     #1
+        cmp     #DR_CONN
         beq     @hold           ; CONNECT: settled - let the theater end
-        cmp     #2
-        beq     @fail           ; ERROR/BUSY/NO x
+        cmp     #DR_ERR
+        bcs     @fail           ; >=DR_ERR: any classified failure
         dex
         bne     @beat
         jmp     session_start   ; silence after 3s = emulator/already online
@@ -853,7 +862,19 @@ act_connect:
 @sess:  jmp     session_start
 @fail:  lda     #INPUTR
         jsr     clear_rowA
-        STR     str_dfail, 2, INPUTR
+        ; pick the actionable line for this verdict (dialres DR_ERR..DR_NOANS)
+        lda     dialres
+        sec
+        sbc     #DR_ERR
+        asl     a               ; *2 (2-byte pointers)
+        tax
+        lda     dfail_ptrs,x
+        sta     src
+        lda     dfail_ptrs+1,x
+        sta     src+1
+        ldx     #2
+        lda     #INPUTR
+        jsr     draw_at
         ldx     #180            ; ~3s, back to the menu
 @fx:    jsr     frame_wait
         dex
@@ -965,43 +986,75 @@ bell_maybe:
         jmp     dtone
 @x:     rts
 
-; dial_byte - first-letter line classifier: E/B = fail, NO.. = fail,
-; CO.. = connect. Sets dialres 1/2. (Port of the GS routine.)
+; dial_byte - classify a modem result line into a SPECIFIC verdict, one rx
+; byte at a time. mdm_c1 holds the line phase (0 start / 'C' saw C / 'N' saw N
+; / 'M' saw "NO", scanning for the keyword / $FF line done). Sets dialres to a
+; DR_* code; silence leaves it 0. (Port of the GS routine - keep in step.)
 dial_byte:
         and     #$7F
         cmp     #$0D
-        beq     @nl
+        beq     @nl             ; CR: line boundary -> reset phase
         cmp     #$20
-        bcc     @x
+        bcc     @x              ; other control byte: ignore
         ldx     mdm_c1
-        bne     @c2
-        sta     mdm_c1
+        cpx     #$FF
+        beq     @x              ; line done: drain the rest
+        cpx     #'C'
+        beq     @pC
+        cpx     #'N'
+        beq     @pN
+        cpx     #'M'
+        beq     @pM
+        ; phase 0: the line's first letter
+        cmp     #' '
+        beq     @x              ; skip a leading space, stay in phase 0
         cmp     #'E'
-        beq     @fail
+        beq     @err
         cmp     #'B'
-        beq     @fail
+        beq     @busy
+        cmp     #'C'
+        beq     @setC
+        cmp     #'N'
+        beq     @setN
+        jmp     @ignore         ; OK / RING / dial echo / other -> not a verdict
+@pC:    cmp     #'O'            ; "CO" -> CONNECT
+        bne     @ignore
+        lda     #DR_CONN
+        bne     @set            ; DR_CONN != 0: always taken
+@pN:    cmp     #'O'            ; "NO" -> scan for the keyword
+        bne     @ignore
+        lda     #'M'
+        sta     mdm_c1
         rts
-@c2:    cpx     #$FF
-        beq     @x
-        pha
+@pM:    cmp     #' '            ; skip the space(s) after "NO"
+        beq     @x              ; stay in 'M'
+        cmp     #'C'
+        beq     @nocar
+        cmp     #'A'
+        beq     @noans
+        lda     #DR_NOCAR       ; NO DIALTONE / other NO x -> carrier-class fail
+        bne     @set
+@setC:  lda     #'C'
+        sta     mdm_c1
+        rts
+@setN:  lda     #'N'
+        sta     mdm_c1
+        rts
+@err:   lda     #DR_ERR
+        bne     @set
+@busy:  lda     #DR_BUSY
+        bne     @set
+@nocar: lda     #DR_NOCAR
+        bne     @set
+@noans: lda     #DR_NOANS
+@set:   sta     dialres         ; verdict recorded; drain the rest of the line
+@ignore:
         lda     #$FF
         sta     mdm_c1
-        pla
-        cmp     #'O'
-        bne     @x
-        cpx     #'C'
-        beq     @conn
-        cpx     #'N'
-        beq     @fail
-        rts
-@conn:  lda     #1
-        sta     dialres
-        rts
-@fail:  lda     #2
-        sta     dialres
+@x:     rts
 @nl:    lda     #0
         sta     mdm_c1
-@x:     rts
+        rts
 
 ; modem_resume - skip-dial reconnect path only. Carrier is up but a WiModem
 ; that dropped to COMMAND mode after a Ctrl-C-to-menu would treat the auto-sent
@@ -1762,7 +1815,17 @@ str_sub:    .byte "for Apple II - v1.1.0",0
 str_by:     .byte "by Wells Workshop",0
 str_dial:   .byte "Dialing...",0
 str_nocarr: .byte "* connection lost - back to menu",0
-str_dfail:  .byte "Dial failed - try the modem console",0
+; per-verdict dial-failure lines, indexed DR_ERR..DR_NOANS by dfail_ptrs.
+; Each is actionable and <=38 chars so it fits at col 2 on a 40-col screen.
+str_derr:   .byte "ERROR - set entry 0: AT&Z0=host:port",0
+str_dbusy:  .byte "BUSY - bridge has another client",0
+str_dnocar: .byte "NO CARRIER - is the bridge running?",0
+str_dnoans: .byte "NO ANSWER - check host/port, 9600 8N1",0
+dfail_ptrs:
+        .addr   str_derr        ; DR_ERR
+        .addr   str_dbusy       ; DR_BUSY
+        .addr   str_dnocar      ; DR_NOCAR
+        .addr   str_dnoans      ; DR_NOANS
 str_atd:    .byte "ATDS=0",0
 str_ato:    .byte "ATO",0                 ; resume the data link on a skip-dial reconnect
 str_quit:   .byte "/quit"
