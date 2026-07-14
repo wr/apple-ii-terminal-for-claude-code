@@ -1640,16 +1640,16 @@ do_token:
         inx
         cpx     #6
         bne     @wm
-        ldx     #0
+        ldy     #0              ; index in Y: getbyte clobbers X (returns rb_tail)
 @rt:    jsr     getbyte
         and     #$7F
         cmp     #$0D
         beq     @fin
-        sta     TOKBUF+7,x
-        inx
-        cpx     #$28            ; hard cap 40 (token is 32) - never overrun
+        sta     TOKBUF+7,y
+        iny
+        cpy     #$28            ; hard cap 40 (token is 32) - never overrun
         bcc     @rt
-@fin:   stx     TOKBUF+6        ; length
+@fin:   sty     TOKBUF+6        ; length
         lda     #0
         ldy     #0
 @ck1:   clc
