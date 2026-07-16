@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cc65
+      - name: Install build dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-build.txt
+          python3 -m pip check
+      - name: Cache pinned dos33fsprogs
+        id: cache-dos33
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/dos33fsprogs
+          key: dos33fsprogs-78fc3bd4b24a6b792f49f311e85412e0cccc272c
+      - name: Build pinned dos33fsprogs
+        if: steps.cache-dos33.outputs.cache-hit != 'true'
+        run: tools/bootstrap-dos33fsprogs.sh
+      - name: Build and validate disk
+        run: |
+          DOS33FSPROGS="$HOME/dos33fsprogs" ./apple2gs/build.sh
+          DOS33FSPROGS="$HOME/dos33fsprogs" ./tools/check-release-disk.sh apple2gs/CLAUDE.dsk
+          DOS33FSPROGS="$HOME/dos33fsprogs" ./tests/test_release_gate.sh apple2gs/CLAUDE.dsk
+          cd apple2gs
+          sha256sum CLAUDE.dsk > SHA256SUMS
+      - name: Upload release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-disk-release
+          path: |
+            apple2gs/CLAUDE.dsk
+            apple2gs/SHA256SUMS
+          if-no-files-found: error
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            apple2gs/CLAUDE.dsk apple2gs/SHA256SUMS \
+            --verify-tag \
+            --title "Apple II Terminal for Claude Code $GITHUB_REF_NAME" \
+            --notes "Download CLAUDE.dsk, verify it with SHA256SUMS, and copy it to FloppyEmu. Existing users can overwrite the prior CLAUDE.dsk entry in place."

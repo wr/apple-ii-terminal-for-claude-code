@@ -1,5 +1,6 @@
 import time
 import types
+import bridge as bridge_module
 from bridge import (PairingManager, require_pairing, CMD_TOKEN, EOT,
                      run_app_session, _looks_like_token, gen_token, _TOKEN_LEN)
 
@@ -146,6 +147,28 @@ def test_run_app_session_swallows_stale_token_on_ungated_transport():
     run_app_session(term, args, backend, None, "code")
     assert backend.prompts == ["hello"], (
         f"stale token leaked through to the backend: {backend.prompts!r}")
+
+
+def test_direct_app_dial_gets_connect_and_ato_is_swallowed():
+    term = _FakeTerm([])
+    assert hasattr(bridge_module, "_ack_direct_dial")
+    ack_direct_dial = bridge_module._ack_direct_dial
+
+    assert ack_direct_dial(term, "ATDS=0", app=True) is True
+    assert term.lines_out == ["CONNECT"]
+    assert ack_direct_dial(term, "ATO", app=True) is True
+    assert term.lines_out == ["CONNECT"]
+
+
+def test_run_app_session_swallows_direct_dial_commands():
+    term = _FakeTerm(["ATDS=0", "ATO", "hello", None])
+    backend = _FakeBackend()
+
+    run_app_session(term, _args(cols=80), backend, None, "code")
+
+    assert term.lines_out[0] == "CONNECT"
+    assert term.lines_out.count("CONNECT") == 1
+    assert backend.prompts == ["hello"]
 
 
 def test_run_app_session_swallows_token_on_live_reconnect():

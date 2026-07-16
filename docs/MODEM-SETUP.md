@@ -97,6 +97,17 @@ we'd switch the client's dial string and WiFi232 would work out of the box.)
 
 ## The modem plays dead — checklist
 
+The native client keeps the modem's raw response visible and adds a short
+diagnosis:
+
+| Result | What the client suggests |
+|---|---|
+| `ERROR` | Save entry 0 with `AT&Z0=host:6400`, then `AT&W` |
+| `BUSY` | The bridge or destination is occupied; retry |
+| `NO CARRIER` | Check entry 0, the bridge process, and WiFi |
+| `NO ANSWER` | Check that the bridge is listening on port 6400 |
+| No response | Check the modem connection and 9600 8N1 settings |
+
 In the order they actually happen:
 
 1. **SSC jumper block backwards.** Arrow to MODEM. Most common cause on a

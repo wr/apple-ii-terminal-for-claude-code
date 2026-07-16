@@ -15,6 +15,12 @@ if [ ! -f "$DISK" ]; then
   exit 1
 fi
 
+size="$(wc -c < "$DISK" | tr -d ' ')"
+if [ "$size" != 143360 ]; then
+  echo "release gate: $DISK is $size bytes; expected 143360" >&2
+  exit 1
+fi
+
 catalog="$("$DOS33" "$DISK" CATALOG)"
 printf '%s\n' "$catalog"
 
@@ -26,4 +32,4 @@ for name in COBJ COBJ8; do
   fi
 done
 
-echo "release gate: disk contains COBJ and COBJ8"
+echo "release gate: disk is 143360 bytes and contains COBJ and COBJ8"

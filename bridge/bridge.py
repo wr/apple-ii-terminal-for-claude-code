@@ -227,6 +227,16 @@ def is_modem_chatter(line: str) -> bool:
     return u.startswith("CONNECT ") and u[8:].strip().isdigit()
 
 
+def _ack_direct_dial(term: Terminal, line: str, app: bool) -> bool:
+    """Emulate a modem verdict when a native emulator is wired straight in."""
+    upper = line.upper()
+    if upper.startswith("ATD"):
+        if app:
+            term.write_line("CONNECT")
+        return True
+    return upper.startswith("ATO")
+
+
 def send_header(term, backend) -> None:
     """Push the client's header frame: 0x0E then one CR-terminated line each."""
     hdr = backend.header() if backend else None
@@ -270,7 +280,7 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
             log("channel closed by peer", peer=peer)
             return
         user = user.strip()
-        if user.upper().startswith(("ATD", "ATO")):
+        if _ack_direct_dial(term, user, args.app):
             # Dial (ATD) / resume-online (ATO) strings: the client sends these to
             # the modem, but when the modem is already in data mode they pass
             # through to us as a line - swallow them, never a prompt.
@@ -708,7 +718,7 @@ def require_pairing(term: Terminal, args, pm: PairingManager) -> bool:
         if line is None:
             return False
         line = line.strip()
-        if line.upper().startswith(("ATD", "ATO")):
+        if _ack_direct_dial(term, line, args.app):
             continue  # the client's dial / resume-online commands aren't a guess
         if is_modem_chatter(line):
             log(f"modem chatter ignored: {line!r}", peer=peer)

@@ -24,8 +24,8 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements-test.txt -r bridge/requirements.txt
           python3 -m pip check
-      - name: Bridge / renderer tests
-        run: python3 -m pytest -q bridge tests/test_interrupt.py
+      - name: Bridge and renderer tests
+        run: python3 -m pytest -q bridge tests
 
   build:
     runs-on: ubuntu-latest
@@ -48,32 +48,29 @@ jobs:
           python3 -m pip install -r requirements-build.txt
           python3 -m pip check
 
-      # dos33fsprogs isn't packaged; build the two util dirs build.sh needs
-      # (utils/dos33fs-utils -> dos33, utils/asoft_basic-utils -> tokenize_asoft).
-      # Cache the whole checkout so we skip the clone+make on cache hits.
-      - name: Cache dos33fsprogs
+      - name: Cache pinned dos33fsprogs
         id: cache-dos33
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: ~/dos33fsprogs
-          key: dos33fsprogs-utils-v1
+          key: dos33fsprogs-78fc3bd4b24a6b792f49f311e85412e0cccc272c
 
-      - name: Build dos33fsprogs (cache miss)
+      - name: Build pinned dos33fsprogs
         if: steps.cache-dos33.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 https://github.com/deater/dos33fsprogs ~/dos33fsprogs
-          make -C ~/dos33fsprogs/utils/dos33fs-utils
-          make -C ~/dos33fsprogs/utils/asoft_basic-utils
+        run: tools/bootstrap-dos33fsprogs.sh
 
-      - name: Verify dos33fsprogs tools built
+      - name: Verify pinned disk tools
         run: |
-          test -x ~/dos33fsprogs/utils/dos33fs-utils/dos33
-          test -x ~/dos33fsprogs/utils/asoft_basic-utils/tokenize_asoft
+          test "$(git -C "$HOME/dos33fsprogs" rev-parse HEAD)" = 78fc3bd4b24a6b792f49f311e85412e0cccc272c
+          test -x "$HOME/dos33fsprogs/utils/dos33fs-utils/dos33"
+          test -x "$HOME/dos33fsprogs/utils/asoft_basic-utils/tokenize_asoft"
 
       # --- Checks -----------------------------------------------------------
 
       - name: Shellcheck
-        run: shellcheck apple2gs/build.sh tools/install-sd.sh tools/check-release-disk.sh tests/test_release_gate.sh
+        run: |
+          shellcheck apple2gs/build.sh tools/install-sd.sh tools/check-release-disk.sh
+          shellcheck tools/bootstrap-dos33fsprogs.sh tests/test_release_gate.sh
 
       # Fast-fail assembly of both clients (mirrors build.sh flags). claude.s
       # includes the generated assets.inc, so gen_assets.py must run first.

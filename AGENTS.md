@@ -26,11 +26,14 @@ The bridge sends **only** printable ASCII + CR/LF plus a small in-band control s
 Build everything (from `apple2gs/`):
 
 ```bash
-./build.sh                 # both clients -> inject into DOS 3.3 master -> CLAUDE.dsk (+ ~/Downloads copy for KEGS)
+./build.sh                 # both clients -> inject into DOS 3.3 master -> CLAUDE.dsk
 python3 gen_assets.py      # regenerate assets.inc (palettes, font, mascot, splash frames, sounds) only
 python3 preview.py assets.inc out.png   # render the GS session screen to PNG WITHOUT an emulator
 ../tools/install-sd.sh     # put the built image on a FloppyEmu SD card safely
 ```
+
+Set `COPY_TO_DOWNLOADS=1` when running `build.sh` to also refresh
+`~/Downloads/CLAUDE.dsk` for KEGS. A plain build writes only inside the repo.
 
 `build.sh` needs the `cc65` toolchain (`ca65`/`ld65`), a [dos33fsprogs](https://github.com/deater/dos33fsprogs) build (default `/tmp/dos33fsprogs`, override with `DOS33FSPROGS`), and Python with **Pillow** (`gen_assets.py` decodes `clawd.gif` at build time to generate the splash frames). The output disk is the vendored DOS 3.3 System Master (`dos33-master-jan83.dsk`) with HELLO replaced and the client binaries added — never a from-scratch image (from-scratch images have burned us).
 
@@ -44,7 +47,7 @@ python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
 - `--app` enables the native-client protocol (bridge stays silent, frames replies with `EOT` = `0x04`). Required for both native clients.
 - `--backend code` runs the real `claude` CLI on the host; `--backend chat` (default) is Messages-API Q&A.
 - Serial hardware instead of KEGS: `--serial /dev/tty.usbserial-XXXX --baud 9600`.
-- A listening bridge (`--telnet`) locks itself behind a 6-character pairing code with per-source-IP retry limits and revocation. By default, `code_for` creates a code when an unpaired source IP needs it; successful use consumes that generated code. In `--app` mode the bridge also issues a 32-char client token via `CMD_TOKEN`, stores its hash plus first IP and pairing time under `$XDG_CONFIG_HOME/claude-ii-terminal/paired.json` (or the `~/.config` fallback), and accepts token possession on reconnect. Raw telnet gets no token and must enter a code each session. `--pair-code` fixes one case-insensitive shared code; `--no-pair` disables the gate. Telnet is plaintext, so captured unused codes or tokens can be replayed; this remains a trusted-LAN design.
+- A listening bridge (`--telnet`) locks itself behind a 6-character pairing code with per-source-IP retry limits and revocation. By default, `code_for` creates a code when an unpaired source IP needs it; successful use consumes that generated code. In `--app` mode the bridge also issues a 32-char client token via `CMD_TOKEN`, stores its hash plus first IP and pairing time under `$XDG_CONFIG_HOME/claude-ii-terminal/paired.json` (or the `~/.config` fallback), and accepts token possession on reconnect. The 8-bit client persists its token on disk across reboots; the IIgs client retains it only in RAM for the current boot. Raw telnet gets no token and must enter a code each session. `--pair-code` fixes one case-insensitive shared code; `--no-pair` disables the gate. Telnet is plaintext, so captured unused codes or tokens can be replayed; this remains a trusted-LAN design.
 
 ## The edit → see-it loop
 
@@ -68,7 +71,7 @@ The reply stream carries a few control bytes the native clients interpret (kept 
 - `0x02` — draw the reply bullet.
 - `0x03` — session over (bridge-side `/quit`): the client returns to its menu.
 - `0x0E` — header frame follows (3 CR-terminated lines); sent in reply to the client's session-open CR probe and before each reply. An **unpaired** peer's probe is answered with a LOCKED header instead — that's how the pairing prompt reaches the screen (idle clients discard unsolicited text but always render headers).
-- `0x05 <token> CR` — (bridge → client, app mode) a freshly issued device token; the native client writes it to a reserved disk sector and auto-sends it as its first line on every future connect, so pairing survives reboots. `to_ascii` drops 0x05 from model text, so a reply can't forge it.
+- `0x05 <token> CR` — (bridge → client, app mode) a freshly issued device token. The 8-bit client writes it to a reserved disk sector so pairing survives reboots; the IIgs client keeps it only in RAM for reconnects during the current boot. Both auto-send a retained token as the first line on reconnect. `to_ascii` drops 0x05 from model text, so a reply can't forge it.
 
 These are injected in `bridge.py:run_app_session` (bullet, footer) and inside `render.py` (inline/fenced `code` spans → white). `to_ascii` deliberately **passes through bytes 1–3** rather than dropping them; the clients' `recv_reply`/`spinner` intercept them before `cout`. Color markers currently count toward wrap width, so code-dense lines may wrap a few columns early.
 

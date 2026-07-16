@@ -59,7 +59,7 @@ def _msg(src, label):
     return m.group(1) if m else None
 
 
-def test_client(path, label):
+def check_client(path, label):
     src = _read(path)
     for k, v in EXPECTED_CONSTS.items():
         check(f"{label}: {k} = {v}", _const(src, k) == v)
@@ -170,8 +170,8 @@ def test_assembles():
 
 
 if __name__ == "__main__":
-    test_client(GS, "GS")
-    test_client(EIGHT, "8bit")
+    check_client(GS, "GS")
+    check_client(EIGHT, "8bit")
     test_classifier()
     test_assembles()
     print("ALL PASS")
