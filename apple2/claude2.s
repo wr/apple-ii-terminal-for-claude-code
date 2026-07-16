@@ -65,7 +65,7 @@ CMD_HEADER = $0E
 
 ; ---- dial verdicts (dialres): the classifier splits a modem result line into
 ;   a specific outcome so each failure gets its own actionable message. 0 is
-;   silence (no line seen) -> proceed, the emulator/already-online path.
+;   silence (no line seen), accepted only when trusted DCD confirms carrier.
 DR_CONN    = 1          ; CONNECT
 DR_ERR     = 2          ; ERROR (bad AT command / missing phonebook entry 0)
 DR_BUSY    = 3          ; BUSY  (the bridge already has a client)
@@ -421,7 +421,8 @@ draw_at:
         stx     curx
 draw_str:
         ldy     #0
-@l:     lda     (src),y         ; src doubles as the string pointer here
+@l:     jsr     rb_poll         ; strings can outlast the 6551's one-byte FIFO
+        lda     (src),y         ; src doubles as the string pointer here
         beq     @d
         ldx     curx            ; clip at the right edge (40-col pages)
         cpx     width
@@ -842,7 +843,18 @@ act_connect:
         bcs     @fail           ; >=DR_ERR: any classified failure
         dex
         bne     @beat
-        jmp     session_start   ; silence after 3s = emulator/already online
+        ; Silence is not proof of a link. Accept it only when DCD has first
+        ; proved itself live by reading no-carrier and now reads carrier.
+        lda     ACIA_S
+        and     #$20            ; 6551 bit5: 0 = carrier present
+        bne     @silent_nocar
+        lda     dcd_trust
+        beq     @fail           ; reject a high DCD that has never moved
+        jmp     @hold           ; trusted carrier: finish theater, then session
+@silent_nocar:
+        lda     #1              ; this no-carrier sample proves the pin is live
+        sta     dcd_trust
+        jmp     @fail
         ; A fast modem answers mid-theater; a buzz chopped at half a note
         ; reads as a glitch, not carrier detect (W-517). The verdict is in,
         ; so stop classifying - play out the storyboard, still draining rx
@@ -862,8 +874,9 @@ act_connect:
 @sess:  jmp     session_start
 @fail:  lda     #INPUTR
         jsr     clear_rowA
-        ; pick the actionable line for this verdict (dialres DR_ERR..DR_NOANS)
         lda     dialres
+        beq     @ftimeout
+        ; pick the actionable line for this verdict (dialres DR_ERR..DR_NOANS)
         sec
         sbc     #DR_ERR
         asl     a               ; *2 (2-byte pointers)
@@ -875,6 +888,10 @@ act_connect:
         ldx     #2
         lda     #INPUTR
         jsr     draw_at
+        jmp     @fwait
+@ftimeout:
+        STR     str_dtimeout, 2, INPUTR
+@fwait:
         ldx     #180            ; ~3s, back to the menu
 @fx:    jsr     frame_wait
         dex
@@ -996,6 +1013,12 @@ dial_byte:
         beq     @nl             ; CR: line boundary -> reset phase
         cmp     #$20
         bcc     @x              ; other control byte: ignore
+        cmp     #'a'
+        bcc     @folded
+        cmp     #('z'+1)
+        bcs     @folded
+        and     #$DF            ; modem result codes are case-insensitive
+@folded:
         ldx     mdm_c1
         cpx     #$FF
         beq     @x              ; line done: drain the rest
@@ -1377,8 +1400,9 @@ read_line:
         rts
 
 ; =====================================================================
-; spinner - pulse until the reply's first real byte. Esc = bail to
-; the menu (dead-link escape hatch).
+; spinner - pulse plus bounded elapsed timer until the reply's first real byte.
+; The first Esc/Ctrl-C asks the bridge to cancel. A second key, carrier loss,
+; or ten seconds without the bridge's EOT returns locally from a dead link.
 ; =====================================================================
 spinner:
         lda     #0
@@ -1386,22 +1410,39 @@ spinner:
         sta     sp_ph
         sta     sp_fr           ; frame counter: bell_maybe's >=15s gate
         sta     sp_fr+1
+        sta     sp_sub
+        sta     sp_s1
+        sta     sp_s10
+        sta     sp_m1
+        sta     sp_m10
+        sta     sp_h
+        sta     spin_cancel
+        sta     spin_wait
+        sta     spin_wait+1
+        jsr     sp_draw_line    ; timer text changes only once per second
 @lp:    lda     KBD
         bpl     @nk
         sta     KBDSTRB
         and     #$7F
         cmp     #$1B
-        beq     @esc
-        cmp     #$03            ; Ctrl-C: ask the bridge to stop the turn
+        beq     @cancel
+        cmp     #$03
         bne     @nk
+@cancel:
+        lda     spin_cancel     ; send exactly one interrupt, then drain to EOT
+        bne     @force          ; second Esc/Ctrl-C forces a local return
+        inc     spin_cancel
         lda     #$03            ; a bare byte on the wire; the bridge kills
-        jsr     aciaput         ; the claude turn and EOTs what it has
+        jsr     aciaput         ; the Claude turn and EOTs what it has
         jmp     @lp
-@esc:   lda     #1
+@force: lda     #1
         sta     quitflag
-        lda     #EOT            ; fake end-of-reply
+        lda     #EOT            ; synthesize end-of-reply when the link is dead
         jmp     @stash
-@nk:    jsr     havebyte
+        ; a real modem's DCD loss bails locally
+@nk:    jsr     check_carrier
+        bcc     @force
+        jsr     havebyte
         beq     @draw
         jsr     getbyte
         and     #$7F
@@ -1424,17 +1465,13 @@ spinner:
 @stash: sta     firstbyte
         lda     #1
         sta     havefirst
-        ; erase the pulse cell
+        ; erase the pulse/timer line
         lda     cury
         pha
         lda     curx
         pha
-        lda     #0
-        sta     curx
         lda     #BTMROW
-        sta     cury
-        lda     #$A0
-        jsr     putscr
+        jsr     clear_rowA
         pla
         sta     curx
         pla
@@ -1443,7 +1480,45 @@ spinner:
 @q:     lda     #1
         sta     quitflag
         jmp     @lp
-@draw:  lda     cury
+@draw:  inc     sp_ph
+        jsr     sp_draw_pulse   ; per-frame work is one cell
+        jsr     frame_wait
+        inc     sp_sub
+        lda     sp_sub
+        cmp     #60
+        bcc     @frame
+        lda     #0
+        sta     sp_sub
+        jsr     sp_tick_second
+        jsr     sp_draw_line    ; smart units change width at rollovers
+@frame:
+        lda     spin_cancel     ; bound a wait for a bridge that cannot EOT
+        beq     @bellframe
+        inc     spin_wait
+        bne     @timeout
+        inc     spin_wait+1
+@timeout:
+        lda     spin_wait+1     ; 600 frames is about ten seconds
+        cmp     #>600
+        bcc     @bellframe
+        bne     @force_timeout
+        lda     spin_wait
+        cmp     #<600
+        bcc     @bellframe
+@force_timeout:
+        jmp     @force
+@bellframe:
+        inc     sp_fr           ; one frame of thinking (saturates: a
+        bne     @nf             ; wrap would un-ring an 18-minute bell)
+        lda     sp_fr+1
+        cmp     #$FF
+        beq     @nf
+        inc     sp_fr+1
+@nf:    jmp     @lp
+
+; sp_draw_pulse - update only the animated cell so frames track wall time.
+sp_draw_pulse:
+        lda     cury
         pha
         lda     curx
         pha
@@ -1451,7 +1526,6 @@ spinner:
         sta     curx
         lda     #BTMROW
         sta     cury
-        inc     sp_ph
         lda     sp_ph
         lsr
         lsr
@@ -1464,14 +1538,144 @@ spinner:
         sta     curx
         pla
         sta     cury
-        jsr     frame_wait
-        inc     sp_fr           ; one frame of thinking (saturates: a
-        bne     @nf             ; wrap would un-ring an 18-minute bell)
-        lda     sp_fr+1
-        cmp     #$FF
-        beq     @nf
-        inc     sp_fr+1
-@nf:    jmp     @lp
+        rts
+
+; sp_draw_line - keep Claude's *+:+ pulse and add the GS-style smart timer.
+sp_draw_line:
+        lda     cury
+        pha
+        lda     curx
+        pha
+        lda     #0
+        sta     curx
+        lda     #BTMROW
+        sta     cury
+        lda     sp_ph
+        lsr
+        lsr
+        and     #$03
+        tax
+        lda     sp_glyphs,x
+        ora     #$80
+        jsr     putscr
+        lda     #' '|$80
+        jsr     putscr
+        lda     #'('|$80
+        jsr     putscr
+        jsr     sp_draw_secs
+        lda     #')'|$80
+        jsr     putscr
+@pad:   lda     curx
+        cmp     width
+        bcs     @restore
+        jsr     rb_poll
+        lda     #$A0
+        jsr     putscr
+        jmp     @pad
+@restore:
+        pla
+        sta     curx
+        pla
+        sta     cury
+        rts
+
+; sp_tick_second - decimal elapsed clock, clamped at 9h 59m 59s.
+sp_tick_second:
+        lda     sp_h            ; freeze every digit at the maximum
+        cmp     #9              ; instead of rolling 9:59:59 back to 9:00
+        bne     @inc
+        lda     sp_m10
+        cmp     #5
+        bne     @inc
+        lda     sp_m1
+        cmp     #9
+        bne     @inc
+        lda     sp_s10
+        cmp     #5
+        bne     @inc
+        lda     sp_s1
+        cmp     #9
+        beq     @done
+@inc:   inc     sp_s1
+        lda     sp_s1
+        cmp     #10
+        bcc     @done
+        lda     #0
+        sta     sp_s1
+        inc     sp_s10
+        lda     sp_s10
+        cmp     #6              ; 60 seconds -> carry into minutes
+        bcc     @done
+        lda     #0
+        sta     sp_s10
+        inc     sp_m1
+        lda     sp_m1
+        cmp     #10
+        bcc     @done
+        lda     #0
+        sta     sp_m1
+        inc     sp_m10
+        lda     sp_m10
+        cmp     #6              ; 60 minutes -> carry into hours
+        bcc     @done
+        lda     #0
+        sta     sp_m10
+        lda     sp_h
+        cmp     #9
+        bcs     @done
+        inc     sp_h
+@done:  rts
+
+; sp_draw_secs - smart units: "38s", "12m 18s", or "1h 08m".
+sp_draw_secs:
+        lda     sp_h
+        bne     @hours
+        lda     sp_m1
+        ora     sp_m10
+        bne     @mins
+        lda     sp_s10
+        beq     @s1
+        jsr     sp_put_digit
+@s1:    lda     sp_s1
+        jsr     sp_put_digit
+        lda     #'s'
+        jmp     sp_put_char
+@mins:  lda     sp_m10
+        beq     @m1
+        jsr     sp_put_digit
+@m1:    lda     sp_m1
+        jsr     sp_put_digit
+        lda     #'m'
+        jsr     sp_put_char
+        lda     #' '
+        jsr     sp_put_char
+        lda     sp_s10
+        jsr     sp_put_digit
+        lda     sp_s1
+        jsr     sp_put_digit
+        lda     #'s'
+        jmp     sp_put_char
+@hours:
+        jsr     sp_put_digit
+        lda     #'h'
+        jsr     sp_put_char
+        lda     #' '
+        jsr     sp_put_char
+        lda     sp_m10
+        jsr     sp_put_digit
+        lda     sp_m1
+        jsr     sp_put_digit
+        lda     #'m'
+        jmp     sp_put_char
+sp_put_digit:
+        clc
+        adc     #'0'
+sp_put_char:
+        pha
+        jsr     rb_poll         ; timer text spans multiple serial byte times
+        pla
+        ora     #$80
+        jmp     putscr
 
 ; =====================================================================
 ; recv_reply - stream until EOT (mirror of the GS routine)
@@ -1821,6 +2025,7 @@ str_derr:   .byte "ERROR - set entry 0: AT&Z0=host:port",0
 str_dbusy:  .byte "BUSY - bridge has another client",0
 str_dnocar: .byte "NO CARRIER - is the bridge running?",0
 str_dnoans: .byte "NO ANSWER - check host/port, 9600 8N1",0
+str_dtimeout:.byte "NO MODEM RESPONSE: CHECK 9600 8N1",0
 dfail_ptrs:
         .addr   str_derr        ; DR_ERR
         .addr   str_dbusy       ; DR_BUSY
@@ -1878,6 +2083,14 @@ muteflag:   .res 1          ; Ctrl-C during recv_reply: drain without drawing
 token_pending: .res 1       ; do_token framed a token: token_flush writes it at idle
 sp_ph:      .res 1
 sp_fr:      .res 2          ; spinner frames elapsed (~60/s): the bell gate
+sp_sub:     .res 1          ; frames within the current elapsed second
+sp_s1:      .res 1          ; seconds ones (0-9)
+sp_s10:     .res 1          ; seconds tens (0-5)
+sp_m1:      .res 1          ; minutes ones (0-9)
+sp_m10:     .res 1          ; minutes tens (0-5)
+sp_h:       .res 1          ; hours (timer clamps at 9h 59m 59s)
+spin_cancel:.res 1          ; one interrupt byte sent for this turn
+spin_wait:  .res 2          ; frames since interrupt; force local exit at 600
 wake_done:  .res 1          ; the wake gesture already greeted this boot
 dsnd_ix:    .res 1          ; dial theater: storyboard cursor
 hdr_row:    .res 1

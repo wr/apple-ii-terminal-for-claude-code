@@ -171,6 +171,27 @@ def test_run_app_session_swallows_direct_dial_commands():
     assert backend.prompts == ["hello"]
 
 
+def test_direct_dial_connect_precedes_blocking_backend_prime():
+    events = []
+
+    class _OrderedTerm(_FakeTerm):
+        def write_line(self, text=""):
+            events.append(("write_line", text))
+            super().write_line(text)
+
+    class _BlockingPrimeBackend(_FakeBackend):
+        def prime(self):
+            # Model a backend probe that takes longer than the native dial
+            # window. CONNECT must already be on the transport when it starts.
+            events.append(("prime", None))
+            assert events[0] == ("write_line", "CONNECT")
+
+    term = _OrderedTerm(["ATDS=0", None])
+    run_app_session(term, _args(cols=80), _BlockingPrimeBackend(), None, "code")
+
+    assert events[:2] == [("write_line", "CONNECT"), ("prime", None)]
+
+
 def test_run_app_session_swallows_token_on_live_reconnect():
     # Bug C: the WiModem keeps the TCP link up across a client Ctrl-C -> menu
     # -> Connect, so the bridge stays mid-session (fresh is already False)

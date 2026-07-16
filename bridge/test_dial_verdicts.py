@@ -5,15 +5,18 @@ modem result line into a SPECIFIC verdict and show a distinct, actionable
 message. Rather than boot an emulator, this pins the cross-client contract:
 
   * the five DR_* verdict constants exist with identical values in both,
-  * the four failure messages exist, are actionable, and fit the 8-bit
+  * the five failure messages exist, are actionable, and fit the 8-bit
     40-col fallback (drawn from col 2 -> <=38 chars),
   * dfail_ptrs lists the messages in verdict order (DR_ERR..DR_NOANS),
   * a model of the byte-at-a-time state machine maps real modem lines to the
-    right verdict (CONNECT/ERROR/BUSY/NO CARRIER/NO ANSWER), and leaves
-    silence at 0 so the emulator/already-online path still proceeds.
+    right verdict (CONNECT/ERROR/BUSY/NO CARRIER/NO ANSWER), including
+    lowercase modem responses,
+  * silence is accepted only with a trusted DCD pin that currently reports
+    carrier; every other silent expiry shows NO MODEM RESPONSE.
 
-Plain assert-script (not pytest), like the other bridge tests. If cc65 is on
-PATH it also assembles + links both clients as a final gate.
+The checks are collected by pytest. Running this file directly remains useful
+as a small standalone gate. If cc65 is on PATH it also assembles + links both
+clients.
 """
 import os
 import re
@@ -75,6 +78,76 @@ def check_client(path, label):
     ptrs = re.findall(r"\.addr\s+(\w+)", window)[:len(MESSAGES)]
     check(f"{label}: dfail_ptrs in verdict order",
           ptrs == [m[0] for m in MESSAGES])
+    timeout = _msg(src, "str_dtimeout")
+    check(f"{label}: str_dtimeout defined", timeout is not None)
+    check(f"{label}: timeout says NO MODEM RESPONSE",
+          timeout.startswith("NO MODEM RESPONSE"))
+    check(f"{label}: timeout fits 40-col (<= {MAX_MSG_LEN})",
+          len(timeout) <= MAX_MSG_LEN)
+    classifier = src[src.index("dial_byte:"):][:700]
+    check(f"{label}: classifier folds lowercase modem text",
+          re.search(
+              r"cmp\s+#'a'.*?cmp\s+#\('z'\+1\).*?and\s+#\$DF",
+              classifier,
+              re.S,
+          ) is not None)
+
+
+def test_native_dial_verdict_contract():
+    check_client(GS, "GS")
+    check_client(EIGHT, "8bit")
+
+    gs = _read(GS)
+    gs_expiry = gs[gs.index("ac_ck:"):gs.index("ac_hold:")]
+    check("GS: silent expiry samples DCD",
+          re.search(r"lda\s+SCC_STAT\s+and\s+#\$08", gs_expiry) is not None)
+    check("GS: silent expiry requires trusted DCD",
+          re.search(r"lda\s+dcd_trust\s+beq\s+ac_fail", gs_expiry) is not None)
+    check("GS: trusted carrier joins CONNECT theater finish",
+          "bra     ac_hold" in gs_expiry)
+    gs_failure = gs[gs.index("ac_fail:"):gs.index("; menu_draw")]
+    check("GS: silent failure selects NO MODEM RESPONSE",
+          re.search(
+              r"lda\s+dialres\s+beq\s+af_timeout.*?af_timeout:"
+              r".*?lda\s+#str_dtimeout",
+              gs_failure,
+              re.S,
+          ) is not None)
+    check("GS: dial failure returns to menu",
+          "jmp     menu_screen" in gs_failure)
+
+    eight = _read(EIGHT)
+    eight_expiry = eight[eight.index("@ck:"):eight.index("@hold:")]
+    check("8bit: silent expiry samples DCD",
+          re.search(
+              r"lda\s+ACIA_S.*?and\s+#\$20.*?bne\s+@silent_nocar",
+              eight_expiry,
+              re.S,
+          ) is not None)
+    check("8bit: silent expiry requires trusted DCD",
+          re.search(r"lda\s+dcd_trust\s+beq\s+@fail", eight_expiry) is not None)
+    check("8bit: DCD is sampled before stored trust is consulted",
+          eight_expiry.index("lda     ACIA_S") <
+          eight_expiry.index("lda     dcd_trust"))
+    check("8bit: no-carrier sample records DCD trust and fails",
+          re.search(
+              r"@silent_nocar:.*?sta\s+dcd_trust.*?jmp\s+@fail",
+              eight_expiry,
+              re.S,
+          ) is not None)
+    check("8bit: trusted carrier joins CONNECT theater finish",
+          "jmp     @hold" in eight_expiry)
+    eight_failure = eight[eight.index("@fail:", eight.index("@ck:")):
+                          eight.index("; dsnd_beat")]
+    check("8bit: silent failure selects NO MODEM RESPONSE",
+          re.search(
+              r"lda\s+dialres\s+beq\s+@ftimeout.*?@ftimeout:"
+              r".*?STR\s+str_dtimeout",
+              eight_failure,
+              re.S,
+          ) is not None)
+    check("8bit: dial failure returns to menu",
+          "jmp     menu_screen" in eight_failure)
 
 
 # --------------------------------------------------------------------------- #
@@ -94,6 +167,8 @@ def classify(line):
         if b < 0x20:             # other control byte
             continue
         c = chr(b)
+        if 'a' <= c <= 'z':
+            c = c.upper()
         if phase == 0xFF:
             continue
         if phase == ord('C'):
@@ -140,6 +215,11 @@ def test_classifier():
         "NO CARRIER\r": "DR_NOCAR",
         "NO ANSWER\r": "DR_NOANS",
         "NO DIALTONE\r": "DR_NOCAR",   # other NO x -> carrier-class
+        "connect 9600\r": "DR_CONN",
+        "error\r": "DR_ERR",
+        "busy\r": "DR_BUSY",
+        "no carrier\r": "DR_NOCAR",
+        "no answer\r": "DR_NOANS",
     }
     for line, want in cases.items():
         got = classify(line)
@@ -150,6 +230,23 @@ def test_classifier():
     # a full transcript: echo, then RING, then the real verdict
     check("classify echo+RING+CONNECT -> CONNECT",
           classify("ATDS=0\r\nRING\r\nCONNECT 9600\r") == EXPECTED_CONSTS["DR_CONN"])
+
+
+def _silent_expiry_allows_session(dcd_trust, dcd_carrier):
+    """Model the A4 native-client policy for a dialres == 0 expiry."""
+    return bool(dcd_trust and dcd_carrier)
+
+
+def test_silent_expiry_requires_trusted_live_carrier():
+    cases = {
+        (False, False): False,
+        (False, True): False,   # high but untrusted may be a strapped pin
+        (True, False): False,
+        (True, True): True,
+    }
+    for inputs, expected in cases.items():
+        check(f"silence trust/carrier {inputs} -> {expected}",
+              _silent_expiry_allows_session(*inputs) is expected)
 
 
 def test_assembles():
@@ -170,8 +267,8 @@ def test_assembles():
 
 
 if __name__ == "__main__":
-    check_client(GS, "GS")
-    check_client(EIGHT, "8bit")
+    test_native_dial_verdict_contract()
     test_classifier()
+    test_silent_expiry_requires_trusted_live_carrier()
     test_assembles()
     print("ALL PASS")

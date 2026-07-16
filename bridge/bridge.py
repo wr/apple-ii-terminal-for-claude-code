@@ -258,21 +258,34 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
     if backend_err:
         term.write_line(f"[chat unavailable: {backend_err}]")
         term.write(EOT)
-    if backend:  # learn the model/cwd/version, then show the header at boot
+
+    backend_primed = False
+
+    def prime_backend() -> None:
+        """Learn model/cwd/version once, then publish the native header."""
+        nonlocal backend_primed
+        if backend is None or backend_primed:
+            return
         backend.prime()
+        backend_primed = True
         send_header(term, backend)
-        if pair_via == "code":
-            # Paired via a typed code: the client is still in recv_reply reading
-            # the reply, and require_pairing sent the token frame WITHOUT an EOT.
-            # Send the header (version string, drawn in the fixed slot) AND an
-            # explicit confirmation as transcript text - the latter renders via
-            # the client's cout, so the user gets a clear "you paired" line, not
-            # just a header refresh. All of this lands before the terminating
-            # EOT (and thus before the deferred token write goes deaf).
-            term.write(b"\x01\x02")  # coral
-            term.write_line("Paired! Type a message to begin.")
-            term.write(b"\x01\x01")  # back to gray
-            term.write(EOT)
+
+    if backend and pair_via == "code":
+        # require_pairing already consumed the dial command before accepting
+        # the code, and left the client waiting inside recv_reply. Prime now so
+        # the token frame, version header, and confirmation share one frame.
+        prime_backend()
+        # Paired via a typed code: the client is still in recv_reply reading
+        # the reply, and require_pairing sent the token frame WITHOUT an EOT.
+        # Send the header (version string, drawn in the fixed slot) AND an
+        # explicit confirmation as transcript text - the latter renders via
+        # the client's cout, so the user gets a clear "you paired" line, not
+        # just a header refresh. All of this lands before the terminating
+        # EOT (and thus before the deferred token write goes deaf).
+        term.write(b"\x01\x02")  # coral
+        term.write_line("Paired! Type a message to begin.")
+        term.write(b"\x01\x01")  # back to gray
+        term.write(EOT)
     fresh = True  # no real user input yet: modem chatter is still expected
     while not term.closed:
         user = term.read_line()  # no prompt, echo off - the app echoes locally
@@ -284,8 +297,12 @@ def run_app_session(term: Terminal, args, backend, backend_err, mode,
             # Dial (ATD) / resume-online (ATO) strings: the client sends these to
             # the modem, but when the modem is already in data mode they pass
             # through to us as a line - swallow them, never a prompt.
+            # A direct ATD gets its synthetic CONNECT before backend.prime(),
+            # which may block longer than the native client's dial window.
             log(f"modem command passed through - ignored: {user!r}", peer=peer)
+            prime_backend()
             continue
+        prime_backend()
         if not user or user == "\x03":
             if backend:      # session-open probe: refresh the real header
                 send_header(term, backend)

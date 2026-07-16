@@ -52,7 +52,7 @@ python3 bridge.py --connect 127.0.0.1:6502 --app --backend code --cols 80
 ## The edit → see-it loop
 
 - **GS client, fast path: `preview.py`.** It reproduces `claude.s`'s exact SHR pixel math at KEGS's real display geometry (640×200 stretched to 4:3 → pixels are ~0.42 wide : 1 tall). What the PNG shows is what KEGS shows. It writes a full screen and a zoomed `*_mascot.png`.
-- **GS client, full loop**: `./build.sh`, then **Ctrl-⌘-Reset** in KEGS (boots `~/Downloads/CLAUDE.dsk` via `~/config.kegs`). No bridge restart needed.
+- **GS client, full loop**: `COPY_TO_DOWNLOADS=1 ./build.sh`, then **Ctrl-⌘-Reset** in KEGS (boots `~/Downloads/CLAUDE.dsk` via `~/config.kegs`). No bridge restart needed.
 - **8-bit client**: MAME, fully scripted. `mame apple2ee -sl2 ssc -sl2:ssc:rs232 null_modem -bitbanger socket.127.0.0.1:6502 -flop1 CLAUDE.dsk` wires an emulated Super Serial Card to the bridge's socket; `-autoboot_script` (Lua) types keys and takes snapshots, and Lua read/write taps on memory are how the hard bugs here were actually found. The IIc is `mame apple2c` with `-modem null_modem`. ROMs aren't distributable; the romset was assembled from Asimov parts + a keyboard ROM synthesized from MAME's own matrix source.
 - **Bridge change** (`bridge/*.py`): restart the `python3 bridge.py` process.
 - **Real hardware** (Wells: IIgs + IIc, WiModem 232 Pro, FloppyEmu): `tools/install-sd.sh` — in-place overwrite of the card's existing image (can't fragment). The tool is [wr/floppyemu-sd](https://github.com/wr/floppyemu-sd), vendored in `tools/`.
@@ -111,6 +111,6 @@ GS client (`claude.s`):
 - 6551 TX polls TDRE with a timeout because new-production W65C51N chips never set the bit.
 
 Environment:
-- **KEGS reads `~/config.kegs`** (home dir, not the app folder — macOS translocation). `s6d1` points at `~/Downloads/CLAUDE.dsk`, which `build.sh` refreshes; a leading `#` on the path means "ejected".
+- **KEGS reads `~/config.kegs`** (home dir, not the app folder — macOS translocation). `s6d1` points at `~/Downloads/CLAUDE.dsk`, which `COPY_TO_DOWNLOADS=1 ./build.sh` refreshes; a plain build writes only inside the repo. A leading `#` on the path means "ejected".
 - **Slash commands**: `bridge.py:handle_command` handles `/new`/`/clear`, `/mode`, `/model` (remembered bridge-side and re-passed as `--model` — a passthrough `/model` wouldn't stick across the per-turn process boundary), `/help`, `/quit`/`/exit` (both also matched client-side before transmit). In code mode every other `/command` passes through to `claude -p`, which executes most of them natively (`/cost`, `/context`, `/compact`, skills); TUI-only ones answer "isn't available in this environment". In chat mode unknown commands are rejected (the Messages API has no commands).
 - **Ctrl-C**: at an idle prompt = local quit-to-menu. During a think, the client sends a bare `0x03`; `run_app_session` pumps `backend.stream()` through a thread, polls the transport in stream lulls (`Terminal.poll_ctrl_c`), and on Ctrl-C calls `backend.cancel()` (terminates the `claude -p` process), then sends the partial reply + "Interrupted by user" + EOT. During a printing reply the client just mutes (`muteflag`) and drains to EOT locally.

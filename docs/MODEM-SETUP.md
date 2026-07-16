@@ -78,12 +78,14 @@ Two traps in that table:
 
 The catch: **`ATDS=0` — with the equals sign — is WiModem232 syntax.** Other
 firmware stores phone book entries fine but dials them differently, so
-Connect's auto-dial may error on them. The universal workaround is built into
-the client: dial by hand from the boot menu's **Modem** console, Esc back, and
-pick **Connect** — with the modem already online, the stray dial string passes
-through to the bridge (which swallows it) and the session starts after the
-3-second window. On a IIgs whose modem drives DCD, Connect skips the redial
-entirely.
+Connect's auto-dial may error on them. The manual-dial workaround is: dial by
+hand from the boot menu's **Modem** console, Esc back, and pick **Connect**.
+With the modem already online, the dial string reaches the bridge; the bridge
+swallows it and immediately sends a synthetic `CONNECT` verdict. A modem whose
+DCD pin has first been observed low and now indicates carrier lets the client
+skip the redial entirely. Silence alone is never accepted: without `CONNECT`
+or trusted carrier detect, the client reports `NO MODEM RESPONSE` after the
+3-second window and returns to the menu.
 
 | Device | Store entry 0 | Dial it | Ships at | Notes |
 |---|---|---|---|---|

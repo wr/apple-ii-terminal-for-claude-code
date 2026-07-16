@@ -66,7 +66,8 @@ HEADER_LINES = 3
 
 ; ---- dial verdicts (dialres): the classifier splits a modem result line into
 ;   a specific outcome so each failure gets its own actionable message. 0 is
-;   silence (no line seen) -> proceed, the emulator/already-online path.
+;   silence (no line seen); the dial-window expiry accepts it only when a
+;   trusted DCD pin currently shows carrier.
 DR_CONN    = 1         ; CONNECT
 DR_ERR     = 2         ; ERROR (bad AT command / missing phonebook entry 0)
 DR_BUSY    = 3         ; BUSY  (the bridge already has a client)
@@ -359,11 +360,25 @@ ac_ck:  plx
         bcs     ac_fail
         dex
         bne     ac_lp
-        ; 3s of silence = no modem in the path (KEGS) or already online:
-        ; proceed - through the same ring-out as a fast CONNECT
+        ; Silence is success only when the modem's DCD pin has proved live
+        ; and currently shows carrier. An untrusted high DCD may be strapped,
+        ; so KEGS and DCD-less modems must answer with CONNECT instead.
+        lda     #$10            ; Reset Ext/Status, then sample RR0 now
+        sta     SCC_STAT
+        lda     SCC_STAT
+        and     #$08            ; DCD high = carrier
+        beq     ac_silent_nocar
+        lda     dcd_trust
+        beq     ac_fail
+        ; Trusted carrier: proceed through the same ring-out as CONNECT.
         ; A fast modem answers mid-theater; a buzz chopped at half a note
         ; reads as a glitch, not carrier detect (W-517). The verdict is in,
         ; so stop classifying - just drain rx and let the stream finish.
+        bra     ac_hold
+ac_silent_nocar:
+        lda     #1              ; remember that the DCD pin has now read low
+        sta     dcd_trust
+        bra     ac_fail
 ac_hold:
         lda     mus_on
         beq     ac_sess
@@ -383,6 +398,7 @@ ac_fail:
         jsr     clear_rowA
         ; pick the actionable line for this verdict (dialres DR_ERR..DR_NOANS)
         lda     dialres
+        beq     af_timeout
         sec
         sbc     #DR_ERR
         asl     a               ; *2 (2-byte pointers)
@@ -390,6 +406,12 @@ ac_fail:
         rep     #$20
         .a16
         lda     dfail_ptrs,x
+        bra     af_ptr
+af_timeout:
+        rep     #$20
+        .a16
+        lda     #str_dtimeout
+af_ptr:
         sta     strptr
         lda     #2
         sta     curcol
@@ -1198,6 +1220,12 @@ dial_byte:
         beq     db_nl           ; CR: line boundary -> reset phase
         cmp     #$20
         bcc     db_x            ; other control byte: ignore
+        cmp     #'a'
+        bcc     db_folded
+        cmp     #('z'+1)
+        bcs     db_folded
+        and     #$DF            ; lower-case modem firmware -> upper-case
+db_folded:
         ldx     mdm_c1
         cpx     #$FF
         beq     db_x            ; line done: drain the rest
@@ -1626,7 +1654,22 @@ sp_pc_x:
 tick_second:
         .a8
         .i8
-        inc     sp_s1
+        lda     sp_h            ; freeze every elapsed digit at 9h 59m 59s
+        cmp     #9              ; instead of rolling the display to 9h 00m
+        bne     ts_inc
+        lda     sp_m10
+        cmp     #5
+        bne     ts_inc
+        lda     sp_m1
+        cmp     #9
+        bne     ts_inc
+        lda     sp_s10
+        cmp     #5
+        bne     ts_inc
+        lda     sp_s1
+        cmp     #9
+        beq     ts_word         ; timer is clamped; still rotate thinking words
+ts_inc: inc     sp_s1
         lda     sp_s1
         cmp     #10
         bcc     ts_word
@@ -1646,7 +1689,10 @@ tick_second:
         cmp     #6              ; 60 minutes -> carry into hours
         bcc     ts_word
         stz     sp_m10
-        inc     sp_h            ; saturates in practice; never displayed past 9h
+        lda     sp_h
+        cmp     #9              ; saturate instead of drawing ':' after 9h
+        bcs     ts_word
+        inc     sp_h
 ts_word:
         dec     sp_wordcd
         bne     ts_done
@@ -2975,6 +3021,7 @@ str_derr:   .byte "ERROR - set entry 0: AT&Z0=host:port",0
 str_dbusy:  .byte "BUSY - bridge has another client",0
 str_dnocar: .byte "NO CARRIER - is the bridge running?",0
 str_dnoans: .byte "NO ANSWER - check host/port, 9600 8N1",0
+str_dtimeout:.byte "NO MODEM RESPONSE - check 9600 8N1",0
 dfail_ptrs:
         .addr   str_derr        ; DR_ERR
         .addr   str_dbusy       ; DR_BUSY
@@ -3024,7 +3071,7 @@ sp_s1:      .res 1          ; seconds ones  (0-9)
 sp_s10:     .res 1          ; seconds tens  (0-5)
 sp_m1:      .res 1          ; minutes ones  (0-9)
 sp_m10:     .res 1          ; minutes tens  (0-5)
-sp_h:       .res 1          ; hours         (saturates; a 10h wait won't happen)
+sp_h:       .res 1          ; hours         (saturates at 9)
 b_head:     .res 1          ; ring index of the current (being-written) line
 b_count:    .res 1          ; number of lines recorded (1..BUF_LINES)
 b_col:      .res 1          ; column within the current line (0..79)
