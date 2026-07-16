@@ -1503,6 +1503,8 @@ spinner:
         stz     sp_m1
         stz     sp_m10
         stz     sp_h
+        stz     spin_cancel
+        stz     spin_wait
         inc     spinword        ; next word for this reply
         lda     spinword
         cmp     #SPIN_COUNT
@@ -1512,22 +1514,29 @@ spinner:
         lda     #5              ; seconds until the word rotates
         sta     sp_wordcd
 sp_lp:
-        lda     KBD             ; Esc aborts the wait - escape hatch when the
-        bpl     sp_nk           ; link is dead and no reply will ever come
-        sta     KBDSTRB
-        and     #$7F
+        lda     KBD             ; Esc/Ctrl-C: first press asks the bridge to
+        bpl     sp_nk           ; stop; a second press (or DCD loss, or a
+        sta     KBDSTRB         ; bounded timeout) bails locally when the link
+        and     #$7F            ; is dead and no reply will ever come
         cmp     #$1B
-        beq     sp_esc
+        beq     sp_cancel_key
         cmp     #$03            ; Ctrl-C: ask the bridge to stop the turn
         bne     sp_nk
+sp_cancel_key:
+        lda     spin_cancel     ; send exactly one interrupt, then drain to EOT
+        bne     sp_force        ; second Esc/Ctrl-C forces a local return
+        inc     spin_cancel
         lda     #$03            ; a bare byte on the wire; the bridge kills
         jsr     sccput          ; the claude turn and EOTs what it has
         bra     sp_nk
-sp_esc: lda     #1
+sp_force:
+        lda     #1
         sta     quitflag
-        lda     #EOT            ; fake end-of-reply: recv_reply finishes
-        bra     sp_exj          ; instantly, main sees quitflag -> menu
+        lda     #EOT            ; synthesize end-of-reply when the link is dead
+        brl     sp_exit
 sp_nk:
+        jsr     check_carrier   ; a real modem's DCD loss bails locally
+        bcc     sp_force
         jsr     havebyte
         beq     sp_draw         ; no byte -> keep spinning
         ; a byte is waiting: consume it, discard leading control bytes so the
@@ -1605,6 +1614,14 @@ sp_pad:
         bra     sp_pad
 sp_paced:
         jsr     spin_pace       ; ~100ms real-time; advances the timer
+        lda     spin_cancel     ; bound a bridge that cannot return EOT
+        beq     sp_frame
+        inc     spin_wait
+        lda     spin_wait       ; 100 animation frames is about ten seconds
+        cmp     #100
+        bcc     sp_frame
+        brl     sp_force
+sp_frame:
         inc     frame
         brl     sp_lp           ; long branch: sp_lp is >127 bytes back
 sp_exit:
@@ -3072,6 +3089,8 @@ sp_s10:     .res 1          ; seconds tens  (0-5)
 sp_m1:      .res 1          ; minutes ones  (0-9)
 sp_m10:     .res 1          ; minutes tens  (0-5)
 sp_h:       .res 1          ; hours         (saturates at 9)
+spin_cancel:.res 1          ; one interrupt byte sent for this turn
+spin_wait:  .res 1          ; animation frames since interrupt; exit at 100
 b_head:     .res 1          ; ring index of the current (being-written) line
 b_count:    .res 1          ; number of lines recorded (1..BUF_LINES)
 b_col:      .res 1          ; column within the current line (0..79)
