@@ -13,7 +13,7 @@ It's not a chat toy. The backend is the actual agentic Claude Code, and the clie
 Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones that spell `C-L-A-U-D-E` on the keypad, ring, and answer tone.
 
 > [!TIP]
-> Did you find my work useful? [Your donation](https://buymeacoffee.com/wellsriley) helps fund future projects. Thank you!
+> Did you find my work useful? [Your donation](https://buymeacoffee.com/wellsworkshop) helps fund future projects. Thank you!
 
 ## Apple II instructions
 
