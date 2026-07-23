@@ -1,18 +1,39 @@
-# Apple II Terminal for Claude Code
+<h1 align="center">Apple II Terminal for Claude Code</h1>
 
-A real Apple II, as a terminal for Claude Code.
+<p align="center">
+  <strong>A real Apple II, as a terminal for the actual <code>claude</code> CLI.</strong>
+</p>
 
-![](docs/demo.gif)
+<p align="center">
+  <a href="#what-is-it">What is it?</a> ⬪
+  <a href="#apple-ii-instructions">Real hardware</a> ⬪
+  <a href="#emulator-instructions">Emulator</a> ⬪
+  <a href="#advanced-bridge-options">Bridge options</a> ⬪
+  <a href="#building-from-source">Build</a> ⬪
+  <a href="#donate">Donate</a>
+</p>
 
-[▶️ Build video](https://www.youtube.com/watch?v=6VsCheEJMIk)
+<p align="center">
+  <img src="docs/demo.gif" width="100%" alt="An Apple II booting the disk, dialing a modem, and running a Claude Code session">
+</p>
 
-Boot a 140K floppy, dial a WiFi modem, and your Apple II becomes a terminal for the real `claude` CLI, bridged from a modern machine. The disk image is bootable on every model from the IIgs down to the II+ (or in an emulator).
+<p align="center">
+  <sub><a href="https://www.youtube.com/watch?v=6VsCheEJMIk">▶️ Watch the build video</a></sub>
+</p>
 
-It's not a chat toy. The backend is the actual agentic Claude Code, and the clients are bare-metal 65816 and 6502 that draw the whole UI themselves from a tiny 7-bit ASCII protocol. A IIgs gets a Super Hi-Res client with an animated splash, scrolling transcript, and thinking spinner; a IIe, IIc, IIc Plus, or II+ gets a text-mode client.
+---
+
+## What is it?
+
+Boot a 140K floppy, dial a WiFi modem, and your Apple II becomes a terminal for the real `claude` CLI, bridged from a modern machine. The disk image is bootable on every model from the IIgs down to the II+ — or in an emulator.
+
+It's not a chat toy. The backend is the actual agentic Claude Code, and the clients are bare-metal 65816 and 6502 that draw the whole UI themselves from a tiny 7-bit ASCII protocol. A IIgs gets a Super Hi-Res client with an animated splash, scrolling transcript, and thinking spinner; a IIe, IIc, IIc Plus, or II+ gets a text-mode client from the same disk.
 
 Press Connect and it plays the 1986 dial-up soundscape: dial tone, touch-tones that spell `C-L-A-U-D-E` on the keypad, ring, and answer tone.
 
-<a href="https://www.buymeacoffee.com/wellsworkshop"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=wellsworkshop&button_colour=FFDD00&font_colour=000000&font_family=Arial&outline_colour=000000&coffee_colour=ffffff" /></a>
+<p align="center">
+  <a href="https://www.buymeacoffee.com/wellsworkshop"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=wellsworkshop&button_colour=FFDD00&font_colour=000000&font_family=Arial&outline_colour=000000&coffee_colour=ffffff" /></a>
+</p>
 
 ## Apple II instructions
 
@@ -136,8 +157,6 @@ Run the bridge without `--app` and it speaks ordinary 40/80-column text, so any 
 
 Slash commands from the II: the bridge handles `/help`, `/new` or `/clear`, `/mode chat|code`, `/model NAME`, and `/quit` or `/exit`. In code mode everything else passes through to the CLI, so `/cost`, `/context`, `/compact`, and your installed skills run for real. Ctrl-C interrupts a reply mid-think (the bridge kills the turn and sends what it has); pressed at an idle prompt it quits to the menu.
 
-- - -
-
 ## Building from source
 
 You don't need this to run it; the release disk is prebuilt. To hack on it you need [cc65](https://cc65.github.io/) (`brew install cc65`), [dos33fsprogs](https://github.com/deater/dos33fsprogs) (built anywhere, point `DOS33FSPROGS` at it), and Python 3 with `requirements-build.txt` installed.
@@ -159,7 +178,9 @@ Everything else is generated at build time: the font from [unscii](http://viznut
 
 The 8-bit client has its own harness: MAME with an emulated Super Serial Card mapped to a TCP socket, driven by Lua-scripted keystrokes, so the whole boot → dial → session → reply loop runs unattended.
 
-- - -
+## Donate
+
+This project is free and open source. If it made you smile, a donation is deeply appreciated and keeps development and support going. [Buy me a coffee](https://www.buymeacoffee.com/wellsworkshop).
 
 ## Credits
 
@@ -170,4 +191,6 @@ This project is not affiliated with or endorsed by Anthropic. This is a fan proj
 - **Emulator:** [KEGS](https://kegs.sourceforge.net/).
 - The Apple II community... Apple II forever!
 
-MIT license, covering this project's own code only. The build and the release disk also include third-party material (Apple's DOS 3.3, the Clawd art, the unscii font); provenance and status for each is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+## License
+
+MIT, covering this project's own code only. The build and the release disk also include third-party material (Apple's DOS 3.3, the Clawd art, the unscii font); provenance and status for each is in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). © 2026 Wells Riley.
