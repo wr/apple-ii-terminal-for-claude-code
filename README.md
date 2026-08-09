@@ -1,3 +1,7 @@
+<p align="center">
+  <img width="50%" alt="logo" src="https://github.com/user-attachments/assets/8b3690a3-94af-4cd3-94ff-5e07c49ebf13" />
+</p>
+
 <h1 align="center">Apple II Terminal for Claude Code</h1>
 
 <p align="center">
@@ -13,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="100%" alt="An Apple II booting the disk, dialing a modem, and running a Claude Code session">
+  <img width="600" alt="YouTube player" src="https://github.com/user-attachments/assets/1336bd9d-2aa2-4fb5-a01a-1eb1692087a6" />
 </p>
 
 <p align="center">
