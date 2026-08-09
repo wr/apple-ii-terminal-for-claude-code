@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img width="600" alt="YouTube player" src="https://github.com/user-attachments/assets/1336bd9d-2aa2-4fb5-a01a-1eb1692087a6" />
+  <a href="https://www.youtube.com/watch?v=6VsCheEJMIk"><img width="600" alt="YouTube player" src="https://github.com/user-attachments/assets/1336bd9d-2aa2-4fb5-a01a-1eb1692087a6" /></a>
 </p>
 
 <p align="center">
