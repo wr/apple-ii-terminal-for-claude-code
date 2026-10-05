@@ -24,6 +24,10 @@
   <sub>I recorded a full build video that you can <a href="https://www.youtube.com/watch?v=6VsCheEJMIk">watch here</a>.</sub>
 </p>
 
+<p align="center">
+  <sub>No way to write a 5¼-inch disk? <a href="https://shop.wells.ee/products/terminal-for-claude-code/?ref=gh-apple-ii-terminal">Get one ready to boot</a> from the Wells Workshop shop.</sub>
+</p>
+
 ---
 
 ## What is it?
