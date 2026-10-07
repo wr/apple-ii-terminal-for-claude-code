@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents (Claude Code via `CLAUDE.md`, Codex) when working with code in this repository.
 
 ## Source of truth
 - GitHub: github.com/wr/apple-ii-terminal-for-claude-code
