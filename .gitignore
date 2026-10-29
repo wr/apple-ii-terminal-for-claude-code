@@ -31,3 +31,6 @@ snap/
 # SDD scratch (subagent workspaces) and assembler listings
 .superpowers/
 *.lst
+
+# Plans and specs live in a private notes repo, not here
+docs/superpowers/
